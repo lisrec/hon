@@ -21,7 +21,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           python -c 'import json,os; from pathlib import Path; version=json.loads(Path("custom_components/hon/manifest.json").read_text())["version"]; assert os.environ["RELEASE_TAG"] == "v" + version'
-          git archive --format=zip --output=hon_integration.zip HEAD:custom_components/hon
+          git archive --format=zip --mtime="$(git show -s --format=%cI HEAD)" --output=hon_integration.zip HEAD:custom_components/hon
           python -m zipfile -t hon_integration.zip
           sha256sum hon_integration.zip > SHA256SUMS
       - name: Upload deterministic assets
