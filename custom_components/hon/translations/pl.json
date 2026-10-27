@@ -1,4 +1,15 @@
 {
+    "options": {
+        "step": {
+            "init": {
+                "title": "Ustawienia poleceń klimatyzatorów",
+                "description": "Żądaj cichego potwierdzania poleceń AC wysyłanych przez tę integrację, także jawnych żądań Echo. Obowiązuje od kolejnego polecenia, bez restartu i wysyłania polecenia teraz. Nie dotyczy pilota, aplikacji hOn ani alarmów urządzenia.",
+                "data": {
+                    "quiet_ac_commands": "Ciche polecenia AC z Home Assistant"
+                }
+            }
+        }
+    },
     "config": {
         "step": {
             "user": {

@@ -1,6 +1,8 @@
 {
-    "name": "Haier hOn",
-    "content_in_root": false,
-    "render_readme": false,
-    "homeassistant": "2022.6.0"
+  "name": "hOn - Quiet AC Commands",
+  "content_in_root": false,
+  "zip_release": true,
+  "filename": "hon_integration.zip",
+  "hide_default_branch": true,
+  "homeassistant": "2026.9.4"
 }

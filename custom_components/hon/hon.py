@@ -19,6 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.exceptions import HomeAssistantError
 
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
@@ -26,6 +27,8 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import (
     DOMAIN,
+    CONF_QUIET_AC_COMMANDS,
+    DEFAULT_QUIET_AC_COMMANDS,
     CONF_ID_TOKEN,
     CONF_COGNITO_TOKEN,
     CONF_REFRESH_TOKEN,
@@ -41,6 +44,14 @@ SESSION_TIMEOUT     = 600 # seconds
 
 from .base import HonBaseCoordinator
 
+
+
+def _prepare_command_parameters(appliance_type, parameters, *, quiet_ac_commands):
+    """Apply the local quiet policy without changing cloud or builder state."""
+    prepared = dict(parameters)
+    if quiet_ac_commands and appliance_type == "AC":
+        prepared["echoStatus"] = "1"
+    return prepared
 
 
 class HonConnection:
@@ -218,6 +229,9 @@ class HonConnection:
     async def async_set(self, mac, typeName, parameters):
 
         await self._ensure_session()
+        quiet_ac_commands = self._entry.options.get(
+            CONF_QUIET_AC_COMMANDS, DEFAULT_QUIET_AC_COMMANDS
+        )
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         command = json.loads("{}")
@@ -239,27 +253,40 @@ class HonConnection:
         command["device"] = json.loads(
             '{"mobileId":"xxxxxxxxxxxxxxxxxxx", "mobileOs": "android", "osVersion": "31", "appVersion": "1.53.4", "deviceModel": "lito"}'
         )
-        command["parameters"] = parameters
+        command["parameters"] = _prepare_command_parameters(
+            typeName,
+            parameters,
+            quiet_ac_commands=quiet_ac_commands,
+        )
         command["timestamp"] = timestamp
         command["transactionId"] = mac + "_" + command["timestamp"]
         _LOGGER.debug((f"Command sent (async_set): {command}"))
 
         async with self._session.post(f"{API_URL}/commands/v1/send",headers=self._headers,json=command,) as resp:
+            if typeName == "AC" and quiet_ac_commands and resp.status != 200:
+                raise HomeAssistantError("hOn failed to send the quiet AC command")
             try:
                 data = await resp.json()
                 _LOGGER.debug((f"Command result (async_set): {data}"))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as err:
+                if typeName == "AC" and quiet_ac_commands:
+                    raise HomeAssistantError("hOn returned an invalid response to the quiet AC command") from err
                 _LOGGER.error("hOn Invalid Data ["+ str(resp.text()) + "] after sending command ["+ str(command)+ "]")
                 return False
             if data["payload"]["resultCode"] == "0":
                 return True
             _LOGGER.error("hOn command has been rejected. Error message ["+ str(data) + "] sent command ["+ str(command)+ "]")
+            if typeName == "AC" and quiet_ac_commands:
+                raise HomeAssistantError("hOn rejected the quiet AC command")
         return False
 
 
     async def send_command(self, device, command, parameters, ancillary_parameters):
 
         await self._ensure_session()
+        quiet_ac_commands = self._entry.options.get(
+            CONF_QUIET_AC_COMMANDS, DEFAULT_QUIET_AC_COMMANDS
+        )
 
         now = datetime.utcnow().isoformat()
         command = {
@@ -281,22 +308,32 @@ class HonConnection:
                 "energyLabel": "0"
             },
             "ancillaryParameters": ancillary_parameters,
-            "parameters": parameters,
+            "parameters": _prepare_command_parameters(
+                device.appliance_type,
+                parameters,
+                quiet_ac_commands=quiet_ac_commands,
+            ),
             "applianceType": device.appliance_type
         }
         _LOGGER.debug((f"Command sent (send_command): {command}"))
 
         url = f"{API_URL}/commands/v1/send"
         async with self._session.post(url, headers=self._headers, json=command) as resp:
+            if device.appliance_type == "AC" and quiet_ac_commands and resp.status != 200:
+                raise HomeAssistantError("hOn failed to send the quiet AC command")
             try:
                 data = await resp.json()
                 _LOGGER.debug((f"Command result (send_command): {data}"))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as err:
+                if device.appliance_type == "AC" and quiet_ac_commands:
+                    raise HomeAssistantError("hOn returned an invalid response to the quiet AC command") from err
                 _LOGGER.error("hOn Invalid Data ["+ str(resp.text()) + "] after sending command ["+ str(command)+ "]")
                 return False
             if data["payload"]["resultCode"] == "0":
                 return True
             _LOGGER.error("hOn command has been rejected. Error message ["+ str(data) + "] sent data ["+ str(command)+ "]")
+            if device.appliance_type == "AC" and quiet_ac_commands:
+                raise HomeAssistantError("hOn rejected the quiet AC command")
         return False
 
     def get_device(self, hass, device_id):

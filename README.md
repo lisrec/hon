@@ -1,4 +1,20 @@
-# hOn
+# hOn — Quiet AC Commands
+
+A small, HACS-installable fork of [gvigroux/hon](https://github.com/gvigroux/hon), based on the released **0.8.4** code. It keeps integration domain `hon`, existing config entries and entity identities. MIT license and upstream attribution are preserved.
+
+## What this fork adds
+
+Enable **Quiet AC commands from Home Assistant** in the integration options. One persistent boolean (`quiet_ac_commands`, default **off**) makes both hOn command-sending paths attach `echoStatus="1"` to the same outgoing AC command. It does not send a separate mute command, add a timer, change thermostat logic, or add another device controller. Other appliance types and the disabled setting retain their previous command parameters.
+
+- Covers commands sent through this integration, including ordinary climate controls and low-level hOn services.
+- The preference is independent of the cloud's reported Echo state. A reported Echo **on** does not prove that an outgoing HA command enables sound.
+- The policy takes precedence over an explicit `echoStatus=0` while enabled. Disable the single integration option if audible HA commands are desired again.
+- Changing the option itself does not start/stop an appliance or reload the integration; it applies to subsequent commands.
+- Does **not** silence the physical remote, the hOn mobile app, mechanical noise, or hardware alarms.
+- Offline transport/options tests and release validation are not physical acoustic acceptance. Confirm support on your own appliance; a rejected quiet command must not be retried automatically as an audible command.
+
+**Requirements:** Home Assistant **2026.9.4 or newer**. Compatibility is tested against that Core version; newer versions may require revalidation. This is a replacement for the original integration, **not a second integration to install alongside it**.
+
 [![GitHub](https://img.shields.io/github/license/gvigroux/hon?color=green)](https://github.com/gvigroux/hon/blob/main/LICENSE)
 
 <a href="https://www.buymeacoffee.com/gvigroux"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=gvigroux&button_colour=5F7FFF&font_colour=ffffff&font_family=Cookie&outline_colour=000000&coffee_colour=FFDD00" /></a>
@@ -13,14 +29,33 @@ I hope that all the peoples that added their devices will test and upgrade this 
 Your appliances must be controlled by the hOn mobile application
 supported device: Haier Climate tested
 
-## Installation
+## Installation through HACS
 
-1. Create a directory ‘hon’ containing the code of the custom_components/hon folder in your `custom_components` directory. 
-2. OR you can add it through HACS > Integration > ... (top right) > Add custom depot > https://github.com/gvigroux/hon
-3. Restart HA
-4. Go to `Settings` - `Devices and Services` and `Add integration`. Search for `hOn` in search bar and select it
-5. Configure the integration with your hOn username and password
-6. Now you can see one new integration named with your email account with the entities and devices registered with hOn App. You can now add this entities in you panel
+1. Use your normal backup/rollback procedure and choose a maintenance window. Replacing Python integration code requires a Home Assistant restart and can affect every appliance in the hOn account.
+2. If the original `gvigroux/hon` is managed by HACS, replace that **HACS repository registration**, rather than installing both repositories for domain `hon`. Prevent the old repository from overwriting this fork. **Do not delete the hOn integration/config entry from Settings → Devices & services.** If HACS requires removal of the old repository first, complete downloading this fork before restarting HA; removal may delete the old integration files.
+3. In HACS, open **Custom repositories**, add `https://github.com/lisrec/hon` with category **Integration**, and download the published release of **hOn - Quiet AC Commands**.
+4. Restart Home Assistant after the replacement files are downloaded.
+5. For an existing installation, retain the existing hOn config entry; for a new installation, add **hOn - Quiet AC Commands** and authenticate with your own hOn account in HA.
+6. Open the hOn integration's **Configure** options and enable **Quiet AC commands from Home Assistant**. Default is off for backward compatibility.
+7. Confirm a representative command still works and is actually silent. Recheck after cloud refreshes; do not use the raw Echo switch as the acceptance criterion.
+
+### Instalacja — skrót po polsku
+
+- Repozytorium niestandardowe HACS: **https://github.com/lisrec/hon**, typ **Integracja**.
+- Fork zastępuje dotychczasowy kod `hon`; nie dodawaj drugiego sterownika tego samego urządzenia i nie usuwaj istniejącego wpisu integracji z HA.
+- Po podmianie kodu zrestartuj HA w uzgodnionym oknie serwisowym.
+- W konfiguracji integracji włącz opcję cichych poleceń AC z Home Assistant. Opcja jest domyślnie wyłączona.
+- Sprawdź działanie i rzeczywistą ciszę. Sam stan Echo nie jest testem akustycznym.
+
+### Rollback
+
+Disable the quiet-command option first if only the new policy must be withdrawn; this does not issue a device command. If code rollback is needed, restore the previously verified integration version/repository and its prior options, restart HA in a maintenance window, and verify current appliance modes/targets. Do not delete account configuration or restore unrelated HA data.
+
+## Development and release validation
+
+Use Python 3.14 and install `requirements-test.txt` into a dedicated virtual environment, then run `python -m pytest -q`. GitHub Actions also checks HACS metadata and hassfest. The release asset `hon_integration.zip` contains only the tracked `custom_components/hon` tree, rooted at the integration files; `SHA256SUMS` records its checksum. Source, manifest and release tag versions must agree.
+
+This fork is MIT-licensed like the upstream project. Upstream device support, cloud protocol and original authorship remain credited below. Quiet-command support must be confirmed on the target appliances; installation readiness does not assert physical testing of every model.
 
 ## How to run any program?
 
@@ -37,8 +72,8 @@ Now you you can see all programs and all possible settings value. Have fun!
 
 You can repeat above process with the setting option and the service: `hon.update_settings`.
 
-## Tested devices
-This integration has been tested with the following devices.
+## Upstream compatibility list
+This is the upstream project's device compatibility list, not a claim of physical quiet-command acceptance with this fork.
 
 ### Climate
 - AS07TS4HRA-M

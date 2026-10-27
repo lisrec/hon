@@ -1,24 +1,31 @@
-name: Release
-
+name: Release package
 on:
   release:
     types: [published]
-
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing verified release tag
+        required: true
+permissions:
+  contents: write
 jobs:
   release-zip:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-
-      - name: ZIP Component Dir
-        run: |
-          cd ${{ github.workspace }}/custom_components/hon
-          zip -r hon_integration.zip ./
-      - name: Upload zip to release
-        uses: svenstaro/upload-release-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ${{ github.workspace }}/custom_components/hon/hon_integration.zip
-          asset_name: hon_integration.zip
-          tag: ${{ github.ref }}
-          overwrite: true
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - name: Verify tag and package exact tracked integration
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          python -c 'import json,os; from pathlib import Path; version=json.loads(Path("custom_components/hon/manifest.json").read_text())["version"]; assert os.environ["RELEASE_TAG"] == "v" + version'
+          git archive --format=zip --output=hon_integration.zip HEAD:custom_components/hon
+          python -m zipfile -t hon_integration.zip
+          sha256sum hon_integration.zip > SHA256SUMS
+      - name: Upload deterministic assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: gh release upload "$RELEASE_TAG" hon_integration.zip SHA256SUMS --clobber

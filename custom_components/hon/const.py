@@ -21,6 +21,8 @@ CONF_ID_TOKEN = "token"
 CONF_COGNITO_TOKEN = "cognito_token"
 CONF_REFRESH_TOKEN = "refresh_token"
 CONF_FRAMEWORK = "framework"
+CONF_QUIET_AC_COMMANDS = "quiet_ac_commands"
+DEFAULT_QUIET_AC_COMMANDS = False
 
 PLATFORMS = [
     "climate",

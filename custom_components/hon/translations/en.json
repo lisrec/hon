@@ -21,6 +21,17 @@
             "auth_error": "Your login attempt has failed. Make sure the username and password are correct."
         }
     },
+    "options": {
+        "step": {
+            "init": {
+                "title": "AC command settings",
+                "description": "Request silent confirmation for AC commands sent by this integration, including explicit Echo requests. Applies from the next command, without restarting or sending a command now. Does not affect remotes, the hOn app or appliance alarms.",
+                "data": {
+                    "quiet_ac_commands": "Quiet AC commands from Home Assistant"
+                }
+            }
+        }
+    },
     "entity": {
         "select": {
             "ac_machmode": {
