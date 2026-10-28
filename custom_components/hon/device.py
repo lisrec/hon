@@ -243,6 +243,17 @@ class HonDevice(CoordinatorEntity):
         command = copy(source)
         # Program selectors are local schema controls, never device parameters.
         command._parameters = {key: copy(value) for key, value in source.parameters.items() if key != "program"}
+        power = command.parameters.get("onOffStatus")
+        if (name == "settings" and self.appliance_type == "AC"
+            and isinstance(power, HonParameterFixed)
+            and type(power._value) in (str, int) and str(power._value) in ("0", "1")):
+            reported = self.attributes.get("parameters", {}).get("onOffStatus")
+            if (not self.coordinator.last_update_success
+                or type(reported) not in (str, int) or str(reported) not in ("0", "1")):
+                raise ValueError("No current reported binary power basis")
+            # SETTINGS preserves power; rebase only this copied fixed field.
+            # The fixed setter still rejects explicit conflicting power intent.
+            power._value = str(reported) if isinstance(power.value, str) else int(reported)
         self.seed_command(command, self.attributes.get("parameters", {}), parameters)
         self.update_command(command, parameters)
         return command

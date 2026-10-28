@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from aiohttp import ClientResponse
 from aiohttp.abc import AbstractStreamWriter
-from aioresponses import aioresponses
+from aioresponses import aioresponses, CallbackResult
 from homeassistant.config_entries import ConfigEntries, ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import frame
@@ -71,6 +71,24 @@ def http(monkeypatch):
     monkeypatch.setattr("aioresponses.core.ClientResponse", OfflineClientResponse)
     with aioresponses() as mocked:
         yield mocked
+
+
+@pytest.fixture
+def unchanged_context(http, device):
+    """Representative unchanged server shadow for pre-existing ACK-only tests.
+
+    Opt-in only: readback/error tests provide their own HTTP responses instead.
+    """
+    def context(url, **kwargs):
+        return CallbackResult(payload={"payload": {"shadow": {"parameters": {
+            key: {"parNewVal": value}
+            for key, value in device.attributes["parameters"].items()
+        }}}})
+
+    http.get(
+        re.compile(re.escape(f"{API_URL}/commands/v1/context") + r"\?.*"),
+        callback=context, repeat=True,
+    )
 
 
 @pytest.fixture

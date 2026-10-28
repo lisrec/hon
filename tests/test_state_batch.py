@@ -10,6 +10,8 @@ from custom_components.hon.command import HonCommand
 from custom_components.hon.parameter import HonParameterRange
 from test_quiet_command_transport import command_schema, enum, sent, SEND_URL
 
+pytestmark = pytest.mark.usefixtures("unchanged_context")
+
 
 def install_settings(device, connection):
     device.commands["settings"] = HonCommand(
@@ -539,9 +541,13 @@ async def test_temperature_only_cannot_start_fixed_on_settings(
     schema["parameters"]["onOffStatus"] = {"typology": "fixed", "fixedValue": "1"}
     device.commands["settings"] = HonCommand("settings", schema, connection, device)
     device.attributes["parameters"]["onOffStatus"] = "0"
-    with pytest.raises(ValueError):
-        await climate.async_set_temperature(temperature=23)
-    assert not http.requests
+    before = deepcopy(device.attributes)
+    http.post(SEND_URL, payload={"payload": {"resultCode": "0"}})
+    await climate.async_set_temperature(temperature=23)
+    assert len(sent(http)) == 1
+    assert sent(http)[0]["parameters"]["onOffStatus"] == "0"
+    assert sent(http)[0]["parameters"]["tempSel"] == 23
+    assert device.attributes == before
 
 
 @pytest.mark.parametrize(

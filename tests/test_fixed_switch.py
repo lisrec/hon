@@ -7,6 +7,8 @@ from custom_components.hon.command import HonCommand
 from custom_components.hon.switch import HonSwitchEntity, HonSwitchEntityDescription
 from test_quiet_command_transport import SEND_URL, command_schema, sent
 
+pytestmark = pytest.mark.usefixtures("unchanged_context")
+
 
 @pytest.mark.parametrize("key", ["screenDisplayStatus", "healthMode"])
 @pytest.mark.parametrize("fixed", ["0", "1"])

@@ -12,6 +12,8 @@ from custom_components.hon.command import HonCommand
 from custom_components.hon.const import API_URL
 from custom_components.hon.switch import HonSwitchEntity, HonSwitchEntityDescription
 
+pytestmark = pytest.mark.usefixtures("unchanged_context")
+
 
 def enum(default, values):
     return {"typology": "enum", "defaultValue": default, "enumValues": values}
@@ -135,7 +137,8 @@ async def test_real_builder_to_transport_preserves_everything_except_echo(
     } == before
     assert device.attributes == shadow_before_send
     assert schema == original_schema
-    assert sum(len(calls) for calls in http.requests.values()) == 1
+    assert sum(len(calls) for calls in http.requests.values()) == 2
+    assert len(sent(http)) == 1  # One POST plus readback, never a replay.
 
 
 @pytest.mark.parametrize("low_level", [False, True])

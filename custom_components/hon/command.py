@@ -42,7 +42,12 @@ class HonCommand:
 
     async def send(self):
         parameters = {name: parameter.value for name, parameter in self._parameters.items()}
-        return await self._connector.send_command(self._device, self._name, parameters, self.ancillary_parameters)
+        accepted = await self._connector.send_command(self._device, self._name, parameters, self.ancillary_parameters)
+        if accepted:
+            # Read actual context after the POST lock is released. Bypass the
+            # request debouncer so consecutive commands each get fresh telemetry.
+            await self._device.coordinator.async_refresh()
+        return accepted
 
     def get_programs(self):
         return self._multi
