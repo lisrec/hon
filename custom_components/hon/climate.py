@@ -66,7 +66,7 @@ from .const import(
     ClimateSwingVertical,
     ClimateEcoPilotMode)
 
-from .parameter import ( HonParameterRange )
+from .parameter import ( HonParameterRange, HonParameterEnum )
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -370,8 +370,23 @@ class HonClimateEntity(CoordinatorEntity, ClimateEntity):
         }
         if hvac_mode not in programs:
             raise ValueError("Unsupported HVAC mode")
+        parameters = dict(parameters or {})
+        if (hvac_mode == HVACMode.FAN_ONLY and 'windSpeed' not in parameters
+            and self._device.get('windSpeed') == CLIMATE_FAN_MODE[FAN_AUTO]):
+            # AUTO may be valid in SETTINGS but unavailable in FAN. Only this
+            # implicit climate transition uses the selected program's default.
+            start = self._device.commands.get('startProgram')
+            fan = start.get_programs().get('iot_fan') if start else None
+            speed = fan.parameters.get('windSpeed') if fan else None
+            if (not isinstance(speed, HonParameterEnum)
+                or type(speed._values) is not list or not speed._values
+                or any(type(value) not in (str, int) or str(value) == ""
+                       for value in speed._values)):
+                raise ValueError("No valid FAN windSpeed enum schema")
+            if CLIMATE_FAN_MODE[FAN_AUTO] not in speed.values:
+                parameters['windSpeed'] = speed.default
         return self._device.start_command(programs[hvac_mode], {
-            **(parameters or {}), 'machMode': CLIMATE_HVAC_MODE[hvac_mode], 'onOffStatus': '1'})
+            **parameters, 'machMode': CLIMATE_HVAC_MODE[hvac_mode], 'onOffStatus': '1'})
 
     async def async_set_temperature(self, **kwargs):
         """Validate mode and target together, then send one isolated command."""
