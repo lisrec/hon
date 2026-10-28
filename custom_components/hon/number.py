@@ -53,29 +53,6 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         coordinator = await hon.async_get_coordinator(appliance)
         device = coordinator.device
 
-        #command = device.settings_command()
-
-        for key in coordinator.device.settings:
-            parameter = coordinator.device.settings[key]
-            if(isinstance(parameter, HonParameterRange)
-            and key.startswith("startProgram.")):
-
-                default_value = default_values.get(parameter.key, {})
-                translation_key = coordinator.device.appliance_type.lower() + '_' + parameter.key.lower()
-                
-                #name=translations.get(f"component.hon.entity.number.{translation_key}.name", parameter.key),
-
-                description = NumberEntityDescription(
-                    key=key,
-                    name=f"{parameter.key}",
-                    entity_category=EntityCategory.CONFIG,
-                    #entity_category=None,
-                    translation_key = translation_key,
-                    icon=default_value.get("icon", None),
-                    unit_of_measurement=default_value.get("unit_of_measurement", None),
-                )
-                appliances.extend([HonNumber(hon, coordinator, appliance, description)])
-
         for key, parameter in coordinator.device.settings.items():
             if not isinstance(parameter, HonParameterRange):
                 continue

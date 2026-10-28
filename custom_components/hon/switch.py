@@ -166,7 +166,9 @@ class HonSwitchEntity(HonBaseSwitchEntity):
         return f"settings.{self.entity_description.key}"
 
     def _setting(self):
-        return self._device.settings.get(self._setting_key())
+        # Fixed fields still constrain intent; editable settings exclude them.
+        command = self._device.commands.get("settings")
+        return command.parameters.get(self.entity_description.key) if command else None
 
     def _target_value(self, turn_on: bool) -> str:
         value = "1" if turn_on else "0"
@@ -182,42 +184,20 @@ class HonSwitchEntity(HonBaseSwitchEntity):
         return self._device.get(self.entity_description.key, "0") == "1"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        setting = self._setting()
-        if setting is not None:
-            if type(setting) == HonParameter:
-                return
-            if self.invert:
-                setting.value = setting.min if isinstance(setting, HonParameterRange) else 0
-            else:
-                setting.value = setting.max if isinstance(setting, HonParameterRange) else 1
-            await self._device.commands["settings"].send()
-            value = str(setting.value)
-        else:
-            value = self._target_value(True)
-            await self.coordinator.async_set({self.entity_description.key: value})
-
-        self._device.set(self.entity_description.key, value)
-        self.async_write_ha_state()
-        self.coordinator.async_set_updated_data({})
+        await self._async_set_switch(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        setting = self._setting()
-        if setting is not None:
-            if type(setting) == HonParameter:
-                return
-            if self.invert:
-                setting.value = setting.max if isinstance(setting, HonParameterRange) else 1
-            else:
-                setting.value = setting.min if isinstance(setting, HonParameterRange) else 0
-            await self._device.commands["settings"].send()
-            value = str(setting.value)
-        else:
-            value = self._target_value(False)
-            await self.coordinator.async_set({self.entity_description.key: value})
+        await self._async_set_switch(False)
 
-        self._device.set(self.entity_description.key, value)
-        self.async_write_ha_state()
-        self.coordinator.async_set_updated_data({})
+    async def _async_set_switch(self, turn_on):
+        setting = self._setting()
+        value = self._target_value(turn_on)
+        if setting is not None:
+            if isinstance(setting, HonParameterRange):
+                value = setting.max if turn_on != self.invert else setting.min
+            await self._device.settings_command({self.entity_description.key: value}).send()
+        else:
+            await self.coordinator.async_set({self.entity_description.key: value})
 
     @property
     def available(self) -> bool:

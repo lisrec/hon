@@ -18,6 +18,7 @@ from homeassistant.config_entries import (
 
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, CONF_ID_TOKEN, CONF_FRAMEWORK, CONF_COGNITO_TOKEN, CONF_REFRESH_TOKEN
 from .const import CONF_QUIET_AC_COMMANDS, DEFAULT_QUIET_AC_COMMANDS
@@ -59,9 +60,10 @@ class HonFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         hon = HonConnection(None, None, self._email, self._password)
         try:
             auth_ok = await hon.async_authorize()
-        except aiohttp.ClientConnectorError:
+        except (HomeAssistantError, aiohttp.ClientError, TimeoutError, ValueError):
             auth_ok = False
-        await hon.async_close()
+        finally:
+            await hon.async_close()
         if not auth_ok:
             errors["base"] = "auth_error"
             return self.async_show_form(step_id="user",data_schema=vol.Schema({vol.Required(CONF_EMAIL): str,vol.Required(CONF_PASSWORD): str}), errors=errors)
@@ -81,6 +83,10 @@ class HonFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_import(self, user_input=None):
         """Import a config entry."""
         return await self.async_step_user(user_input)
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
+        """Reuse the existing password form for HA-initiated reauthentication."""
+        return await self.async_step_reconfigure()
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the reconfiguration flow."""
@@ -104,9 +110,10 @@ class HonFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             hon = HonConnection(None, None, config_entry.unique_id, user_input[CONF_PASSWORD])
             try:
                 auth_ok = await hon.async_authorize()
-            except aiohttp.ClientConnectorError:
+            except (HomeAssistantError, aiohttp.ClientError, TimeoutError, ValueError):
                 auth_ok = False
-            await hon.async_close()
+            finally:
+                await hon.async_close()
             if not auth_ok:
                 errors = {}
                 errors["base"] = "auth_error"
@@ -142,7 +149,7 @@ class HonFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_COGNITO_TOKEN: "",
                     CONF_REFRESH_TOKEN: ""
                 },
-                reason="reconfigure_successful"
+                reason="reauth_successful" if self.source == SOURCE_REAUTH else "reconfigure_successful"
             )
 
         return self.async_show_form(

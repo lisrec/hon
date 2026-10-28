@@ -1,6 +1,7 @@
 import logging
+from copy import copy, deepcopy
 
-from homeassistant.helpers.update_coordinator import (DataUpdateCoordinator,CoordinatorEntity)
+from homeassistant.helpers.update_coordinator import (DataUpdateCoordinator,CoordinatorEntity, UpdateFailed)
 
 from .const import DOMAIN, APPLIANCE_DEFAULT_NAME
 from .command import HonCommand
@@ -124,21 +125,17 @@ class HonDevice(CoordinatorEntity):
             self._attributes.setdefault("parameters", {})[name] = values["parNewVal"]
     """
     async def load_context(self):
+
         data = await self._hon.async_get_context(self)
-        self._attributes = data or {}
-
-        shadow = self._attributes.pop("shadow", None)
-        if not shadow:
-            _LOGGER.warning("Unable to get device context: no shadow data in: %s", self._attributes)
-            return
-
-        parameters = shadow.get("parameters")
-        if not parameters:
-            _LOGGER.warning("Unable to get device context: no parameters in shadow data. %s", self._attributes)
-            return
-
-        for name, values in parameters.items():
-            self._attributes.setdefault("parameters", {})[name] = values.get("parNewVal")
+        shadow = data.get("shadow") if isinstance(data, dict) else None
+        parameters = shadow.get("parameters") if isinstance(shadow, dict) else None
+        if (not isinstance(parameters, dict) or not parameters
+            or any(not isinstance(value, dict) or "parNewVal" not in value for value in parameters.values())):
+            raise UpdateFailed("hOn returned an invalid device snapshot")
+        snapshot = deepcopy(data)
+        snapshot.pop("shadow")
+        snapshot["parameters"] = {key: value["parNewVal"] for key, value in parameters.items()}
+        self._attributes = snapshot
             
     @property
     def data(self):
@@ -208,60 +205,53 @@ class HonDevice(CoordinatorEntity):
                 else:
                     command.parameters.get(key).value = parameters.get(key) """
 
+    def seed_command(self, command, parameters, requested):
+        for key, parameter in command.parameters.items():
+            if key in requested or isinstance(parameter, HonParameterFixed):
+                continue
+            if not self.coordinator.last_update_success:
+                raise ValueError("No current reported basis after failed update")
+            if key not in parameters:
+                raise ValueError(f"No reported basis for parameter: {key}")
+            parameter.value = parameters[key]
+
     def update_command(self, command, parameters):
-        for key in command.parameters.keys():
-            param = command.parameters.get(key)
+        """Validate every explicit field; never silently substitute defaults."""
+        if not isinstance(parameters, dict):
+            raise ValueError("Parameters must be a dictionary")
+        for key, value in parameters.items():
+            if key not in command.parameters:
+                raise ValueError(f"Unsupported parameter: {key}")
+            command.parameters[key].value = value
 
-            if (key not in parameters or isinstance(param, HonParameterFixed)):
-                continue
+    def _draft_command(self, name, parameters=None, program=None):
 
-            new_val = parameters.get(key)
-            if param.value == new_val:
-                continue
-
-            try:
-                param.value = new_val
-
-            except Exception as e:
-                _LOGGER.warning("Update_command: Invalid %s=%s (%s)", key, new_val, e)
-
-                # 👉 fallback intelligent
-                if hasattr(param, "default"):
-                    try:
-                        param.value = param.default
-                        _LOGGER.warning("Update_command: Use Fallback %s -> default %s", key, param.default)
-                    except Exception:
-                        pass
-
-    def settings_command(self, parameters = {}):
-        if( "settings" not in self._commands ):
-            raise ValueError("No command to update settings of the device")
-        command = self._commands.get("settings")
-        self.update_command(command, self.attributes.get("parameters", {}))
+        if name not in self._commands:
+            raise ValueError(f"Unsupported command: {name}")
+        parameters = {} if parameters is None else parameters
+        if not isinstance(parameters, dict):
+            raise ValueError("Parameters must be a dictionary")
+        parameters = dict(parameters)
+        requested_program = parameters.pop("program", program)
+        source = self._commands[name]
+        if requested_program is not None:
+            if program is not None and requested_program != program:
+                raise ValueError("Conflicting program intent")
+            if requested_program not in source.get_programs():
+                raise ValueError("Unsupported program")
+            source = source.get_programs()[requested_program]
+        command = copy(source)
+        # Program selectors are local schema controls, never device parameters.
+        command._parameters = {key: copy(value) for key, value in source.parameters.items() if key != "program"}
+        self.seed_command(command, self.attributes.get("parameters", {}), parameters)
         self.update_command(command, parameters)
-
-        # Update for next command (in case no refresh happens yet)
-        for key in command.parameters.keys():
-            self.attributes.setdefault("parameters", {})[key] = command.parameters.get(key).value
-
         return command
 
-    def start_command(self, program = None, parameters = {}):
-        if( "startProgram" not in self._commands ):
-            raise ValueError("No command to start the device")
-        command = self._commands.get("startProgram")
-        if program is not None:
-            command.set_program(program)
-        # Return the new default command
-        command = self._commands.get("startProgram")
-        self.update_command(command, self.attributes.get("parameters", {}))
-        self.update_command(command, parameters)
-    
-        # Update for next command (in case no refresh happens yet)
-        for key in command.parameters.keys():
-            self.attributes.setdefault("parameters", {})[key] = command.parameters.get(key).value
+    def settings_command(self, parameters=None):
+        return self._draft_command("settings", parameters)
 
-        return command
+    def start_command(self, program=None, parameters=None):
+        return self._draft_command("startProgram", parameters, program)
 
     def get_setting(self, setting_key):
         command_name, parameter_key = setting_key.split(".", 1)
@@ -277,13 +267,8 @@ class HonDevice(CoordinatorEntity):
             return False
         return parameter_key in command.parameters
 
-    def stop_command(self, parameters = {}):
-        if( "stopProgram" in self._commands ):
-            command = self._commands.get("stopProgram")
-            self.update_command(command, self.attributes["parameters"])
-            self.update_command(command, parameters)
-            return command
-        raise ValueError("No command to stop the device")
+    def stop_command(self, parameters=None):
+        return self._draft_command("stopProgram", parameters)
 
     async def load_commands(self):
         commands = await self._hon.load_commands(self._appliance)

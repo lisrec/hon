@@ -13,13 +13,13 @@ import time
 import urllib.parse
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import UpdateFailed
 
 _LOGGER = logging.getLogger(__name__)
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ConfigEntryAuthFailed
 
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
@@ -41,6 +41,8 @@ from .const import (
 
 # CIAM access tokens expire after ~15 minutes, so refresh well before that.
 SESSION_TIMEOUT     = 600 # seconds
+# Bound retry bursts to the normal coordinator polling interval.
+AUTH_RETRY_COOLDOWN = 60 # seconds
 
 from .base import HonBaseCoordinator
 
@@ -73,15 +75,44 @@ class HonConnection:
             self._cognitoToken = entry.data.get(CONF_COGNITO_TOKEN, "")
 
         self._start_time    = time.time()
+        self._session_lock = asyncio.Lock()
+        self._command_locks = {}
+        self._auth_generation = 0
+        self._auth_failed = False
+        self._login_retry_after = 0
 
         self._header = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36"
         }
-        self._session = aiohttp.ClientSession(headers=self._header, connector=aiohttp.TCPConnector(ssl=False))
+        self._session = aiohttp.ClientSession(headers=self._header)
         self._appliances = []
 
+    async def _request_json(self, method, path, *, error="hOn request failed", **kwargs):
+        """Keep response bodies, credential-bearing URLs and client errors private."""
+        try:
+            # Never replay commands or forward credentials to a redirect target.
+            async with self._session.request(
+                method, f"{API_URL}{path}", allow_redirects=False, **kwargs
+            ) as response:
+                if response.status in (401, 403):
+                    self._auth_failed = True
+                    raise ConfigEntryAuthFailed("hOn authentication failed")
+                if response.status != 200:
+                    raise HomeAssistantError(error)
+                data = await response.json()
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            raise HomeAssistantError(error) from None
+        if not isinstance(data, dict):
+            raise HomeAssistantError(error)
+        return data
+
     async def async_close(self):
-        await self._session.close()
+        """Stop owned coordinators before closing the owned HTTP session."""
+        try:
+            for coordinator in self._coordinator_dict.values():
+                await coordinator.async_shutdown()
+        finally:
+            await self._session.close()
 
     @property
     def appliances(self):
@@ -103,10 +134,40 @@ class HonConnection:
 
     async def _ensure_session(self):
         """Re-authenticate when the CIAM tokens are close to expiring (~15 min TTL)."""
+        if self._auth_failed:
+            raise ConfigEntryAuthFailed("hOn authentication failed")
         if time.time() - self._start_time > SESSION_TIMEOUT:
-            await self.async_authorize()
+            async with self._session_lock:
+                if self._auth_failed:
+                    raise ConfigEntryAuthFailed("hOn authentication failed")
+                # Another poll/command may already have refreshed while we waited.
+                if time.time() - self._start_time > SESSION_TIMEOUT:
+                    await self._authorize_session()
 
     async def async_authorize(self):
+        """Share an overlapping login without recursively acquiring the lock."""
+        generation = self._auth_generation
+        async with self._session_lock:
+            if generation != self._auth_generation and not self._auth_failed:
+                return True
+            return await self._authorize_session()
+
+    async def _authorize_session(self):
+        """Stop failed logins from fanning out into stale-token operations/retries."""
+        if self._auth_failed:
+            raise ConfigEntryAuthFailed("hOn authentication failed")
+        if time.monotonic() < self._login_retry_after:
+            raise HomeAssistantError("hOn login temporarily unavailable; retry later")
+        self._start_time = 0
+        try:
+            return await self._async_authorize()
+        except ConfigEntryAuthFailed:
+            raise
+        except HomeAssistantError:
+            self._login_retry_after = time.monotonic() + AUTH_RETRY_COOLDOWN
+            raise
+
+    async def _async_authorize(self):
         """Authenticate against the hOn CIAM endpoint and load the appliances.
 
         Replaces the legacy Salesforce Aura / OAuth2 login that Haier retired in
@@ -126,52 +187,50 @@ class HonConnection:
             "password": self._password,
             "code_challenge": code_challenge,
         }
-        async with self._session.get(f"{API_URL}/ciam/authorize", params=params) as resp:
-            if resp.status != 200:
-                _LOGGER.error("Unable to connect to the CIAM authorize service: " + str(resp.status))
-                return False
-            session_id = (await resp.json()).get("session_id")
-            if not session_id:
-                _LOGGER.error("Unable to get [session_id] - check your email/password")
-                return False
+        data = await self._request_json("GET", "/ciam/authorize", params=params)
+        session_id = data.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise HomeAssistantError("hOn returned an invalid authorization response")
 
         # 2) Exchange the session id (+ PKCE verifier) for the tokens
-        async with self._session.post(
-            f"{API_URL}/ciam/token",
+        data = await self._request_json(
+            "POST", "/ciam/token",
             json={"session_id": session_id, "code_verifier": code_verifier},
-        ) as resp:
-            try:
-                tokens = (await resp.json())["tokens"]
-                self._cognitoToken = tokens["cognito_token"]
-                self._id_token = tokens["id_token"]
-                self._refresh_token = tokens.get("refresh_token", "")
-            except (KeyError, TypeError):
-                _LOGGER.error("Unable to get tokens from /ciam/token. Response: " + await resp.text())
-                return False
+        )
+        tokens = data.get("tokens")
+        if not isinstance(tokens, dict) or any(
+            not isinstance(tokens.get(key), str) or not tokens[key]
+            for key in ("cognito_token", "id_token")
+        ):
+            raise HomeAssistantError("hOn returned an invalid token response")
 
-        # 3) Load the appliance list from the unified-api view
-        url = f"{API_URL}/unified-api/v1/view/appliance-list"
-        async with self._session.post(url, headers=self._headers, json={"deviceId": "homeassistant"}) as resp:
-            try:
-                json_data = await resp.json()
-                self._appliances = json_data["modules"]["applianceList"]["payload"]["appliances"]
-            except (KeyError, TypeError):
-                _LOGGER.error("hOn Invalid Data [" + (await resp.text())[:500] + "] after POST [" + url + "]")
-                return False
-
-            _LOGGER.debug(f"All appliances: {self._appliances}")
-
-            # Keep only appliances that expose a MAC address and a type id
-            self._appliances = [
-                appliance for appliance in self._appliances
-                if "macAddress" in appliance and "applianceTypeId" in appliance
-            ]
+        # 3) Load inventory before publishing a successfully authenticated session.
+        data = await self._request_json(
+            "POST", "/unified-api/v1/view/appliance-list",
+            headers={"cognito-token": tokens["cognito_token"], "id-token": tokens["id_token"]},
+            json={"deviceId": "homeassistant"},
+        )
+        try:
+            appliances = data["modules"]["applianceList"]["payload"]["appliances"]
+        except (KeyError, TypeError):
+            raise HomeAssistantError("hOn returned an invalid appliance list") from None
+        if not isinstance(appliances, list) or any(not isinstance(item, dict) for item in appliances):
+            raise HomeAssistantError("hOn returned an invalid appliance list")
+        self._appliances = [
+            item for item in appliances if "macAddress" in item and "applianceTypeId" in item
+        ]
+        self._cognitoToken = tokens["cognito_token"]
+        self._id_token = tokens["id_token"]
+        self._refresh_token = tokens.get("refresh_token", "")
 
         self._start_time = time.time()
+        self._auth_generation += 1
+        self._auth_failed = False
         return True
 
 
     async def load_commands(self, appliance):
+        await self._ensure_session()
         params = {
             "applianceType": appliance["applianceTypeId"],
             "code": appliance["code"],
@@ -183,40 +242,59 @@ class HonConnection:
             "appVersion": APP_VERSION,
             "series": appliance["series"],
         }
-        url = f"{API_URL}/commands/v1/retrieve"
-        async with self._session.get(url, params=params, headers=self._headers) as resp:
-            result = (await resp.json()).get("payload", {})
-            if not result or result.pop("resultCode") != "0":
-                return {}
-            _LOGGER.debug(f"Commands: {result}")
-            return result
+        data = await self._request_json(
+            "GET", "/commands/v1/retrieve", params=params, headers=self._headers
+        )
+        result = data.get("payload")
+        if not isinstance(result, dict) or result.get("resultCode") != "0":
+            raise HomeAssistantError("hOn returned an invalid commands response")
+        result.pop("resultCode")
+        return result
 
     async def async_get_context(self, device):
-
-        # Refresh the CIAM session before it expires
-        await self._ensure_session()
 
         params = {
             "macAddress": device.mac_address,
             "applianceType": device.appliance_type,
             "category": "CYCLE"
         }
-        url = f"{API_URL}/commands/v1/context"
-        async with self._session.get(url, params=params, headers=self._headers) as response:
-            data = await response.json()
-            _LOGGER.debug(f"Context for mac[{device.mac_address}] type [{device.appliance_type}] {data}")
-            return data.get("payload", {})
+        try:
+            await self._ensure_session()
+            data = await self._request_json(
+                "GET", "/commands/v1/context", params=params, headers=self._headers
+            )
+        except ConfigEntryAuthFailed:
+            raise
+        except HomeAssistantError:
+            raise UpdateFailed("hOn context request failed") from None
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            raise UpdateFailed("hOn returned an invalid context")
+        shadow = payload.get("shadow")
+        parameters = shadow.get("parameters") if isinstance(shadow, dict) else None
+        # Validate the container consumed by load_context before it replaces state.
+        if (
+            not isinstance(parameters, dict) or not parameters
+            or any(not isinstance(value, dict) or "parNewVal" not in value for value in parameters.values())
+            or ("parameters" in payload and not isinstance(payload["parameters"], dict))
+            or ("resultCode" in payload and payload["resultCode"] != "0")
+        ):
+            raise UpdateFailed("hOn returned an invalid context")
+        return payload
 
     async def load_statistics(self, device):
+        await self._ensure_session()
         params = {
             "macAddress": device.mac_address,
             "applianceType": device.appliance_type
         }
-        url = f"{API_URL}/commands/v1/statistics"
-        async with self._session.get(url, params=params, headers=self._headers) as response:
-            data = await response.json()
-            _LOGGER.debug(f"Statistic for mac[{device.mac_address}] type [{device.appliance_type}] {data}")
-            return data.get("payload", {})
+        data = await self._request_json(
+            "GET", "/commands/v1/statistics", params=params, headers=self._headers
+        )
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            raise HomeAssistantError("hOn returned an invalid statistics response")
+        return payload
 
     @property
     def _headers(self):
@@ -227,6 +305,10 @@ class HonConnection:
         }
 
     async def async_set(self, mac, typeName, parameters):
+        async with self._command_locks.setdefault(mac, asyncio.Lock()):
+            return await self._async_set(mac, typeName, parameters)
+
+    async def _async_set(self, mac, typeName, parameters):
 
         await self._ensure_session()
         quiet_ac_commands = self._entry.options.get(
@@ -260,28 +342,27 @@ class HonConnection:
         )
         command["timestamp"] = timestamp
         command["transactionId"] = mac + "_" + command["timestamp"]
-        _LOGGER.debug((f"Command sent (async_set): {command}"))
+        return await self._send(command, quiet=typeName == "AC" and quiet_ac_commands)
 
-        async with self._session.post(f"{API_URL}/commands/v1/send",headers=self._headers,json=command,) as resp:
-            if typeName == "AC" and quiet_ac_commands and resp.status != 200:
-                raise HomeAssistantError("hOn failed to send the quiet AC command")
-            try:
-                data = await resp.json()
-                _LOGGER.debug((f"Command result (async_set): {data}"))
-            except json.JSONDecodeError as err:
-                if typeName == "AC" and quiet_ac_commands:
-                    raise HomeAssistantError("hOn returned an invalid response to the quiet AC command") from err
-                _LOGGER.error("hOn Invalid Data ["+ str(resp.text()) + "] after sending command ["+ str(command)+ "]")
-                return False
-            if data["payload"]["resultCode"] == "0":
-                return True
-            _LOGGER.error("hOn command has been rejected. Error message ["+ str(data) + "] sent command ["+ str(command)+ "]")
-            if typeName == "AC" and quiet_ac_commands:
-                raise HomeAssistantError("hOn rejected the quiet AC command")
-        return False
-
+    async def _send(self, command, *, quiet):
+        """A command succeeds only with a valid cloud acknowledgement; never retry."""
+        label = "quiet AC command" if quiet else "command"
+        data = await self._request_json(
+            "POST", "/commands/v1/send", headers=self._headers, json=command,
+            error=f"hOn failed to send the {label}",
+        )
+        payload = data.get("payload")
+        if not isinstance(payload, dict) or not isinstance(payload.get("resultCode"), str):
+            raise HomeAssistantError(f"hOn returned an invalid response to the {label}")
+        if payload["resultCode"] != "0":
+            raise HomeAssistantError(f"hOn rejected the {label}")
+        return True
 
     async def send_command(self, device, command, parameters, ancillary_parameters):
+        async with self._command_locks.setdefault(device.mac_address, asyncio.Lock()):
+            return await self._send_command(device, command, parameters, ancillary_parameters)
+
+    async def _send_command(self, device, command, parameters, ancillary_parameters):
 
         await self._ensure_session()
         quiet_ac_commands = self._entry.options.get(
@@ -315,26 +396,9 @@ class HonConnection:
             ),
             "applianceType": device.appliance_type
         }
-        _LOGGER.debug((f"Command sent (send_command): {command}"))
-
-        url = f"{API_URL}/commands/v1/send"
-        async with self._session.post(url, headers=self._headers, json=command) as resp:
-            if device.appliance_type == "AC" and quiet_ac_commands and resp.status != 200:
-                raise HomeAssistantError("hOn failed to send the quiet AC command")
-            try:
-                data = await resp.json()
-                _LOGGER.debug((f"Command result (send_command): {data}"))
-            except json.JSONDecodeError as err:
-                if device.appliance_type == "AC" and quiet_ac_commands:
-                    raise HomeAssistantError("hOn returned an invalid response to the quiet AC command") from err
-                _LOGGER.error("hOn Invalid Data ["+ str(resp.text()) + "] after sending command ["+ str(command)+ "]")
-                return False
-            if data["payload"]["resultCode"] == "0":
-                return True
-            _LOGGER.error("hOn command has been rejected. Error message ["+ str(data) + "] sent data ["+ str(command)+ "]")
-            if device.appliance_type == "AC" and quiet_ac_commands:
-                raise HomeAssistantError("hOn rejected the quiet AC command")
-        return False
+        return await self._send(
+            command, quiet=device.appliance_type == "AC" and quiet_ac_commands
+        )
 
     def get_device(self, hass, device_id):
         mac = get_hOn_mac(device_id, hass)
@@ -346,4 +410,8 @@ class HonConnection:
 def get_hOn_mac(device_id, hass):
     device_registry = dr.async_get(hass)
     device = device_registry.async_get(device_id)
-    return next(iter(device.identifiers))[1]
+    identifiers = {identifier[1] for identifier in device.identifiers
+                   if len(identifier) >= 2 and identifier[0] == DOMAIN} if device else set()
+    if len(identifiers) != 1:
+        raise HomeAssistantError("Unknown or ambiguous hOn target")
+    return identifiers.pop()

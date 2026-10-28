@@ -194,7 +194,7 @@ class HonClimateEntity(CoordinatorEntity, ClimateEntity):
         self._attr_supported_features   = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.SWING_MODE | ClimateEntityFeature.TURN_OFF | ClimateEntityFeature.TURN_ON
         
         ''' hon specific values '''
-        parameters = self._device.settings_command().parameters
+        parameters = self._device.commands['settings'].parameters
         #_LOGGER.warning(parameters)
 
         # Set Min / Max temperatures
@@ -217,42 +217,41 @@ class HonClimateEntity(CoordinatorEntity, ClimateEntity):
 
 
     async def async_set_sleep_mode(self, sleep_mode=False):
-        self._sleep_mode = sleep_mode
+
         parameters = {"silentSleepStatus": "1" if sleep_mode else "0"}
         await self._device.settings_command(parameters).send()
 
     async def async_set_rapid_mode(self, rapid_mode=False):
-        self._rapid_mode = rapid_mode
+
         parameters = {"rapidMode": "1" if rapid_mode else "0"}
         await self._device.settings_command(parameters).send()
 
     async def async_set_silent_mode(self, silent_mode=False):
-        self._silent_mode = silent_mode
+
         parameters = {"muteStatus": "1" if silent_mode else "0"}
         await self._device.settings_command(parameters).send()
 
     async def async_set_screen_display(self, screen_display=True):
-        self._screen_display = screen_display
         parameters = {"screenDisplayStatus": "1" if screen_display else "0"}
         await self._device.settings_command(parameters).send()
 
     async def async_set_echo_mode(self, echo_mode=False):
-        self._echo_mode = echo_mode
+
         parameters = {"echoStatus": "0" if echo_mode else "1"}
         await self._device.settings_command(parameters).send()
 
     async def async_set_wind_direction_horizontal(self, value: int):
-        self._wind_direction_horizontal = value
+
         parameters = {'windDirectionHorizontal': str(value)}
         await self._device.settings_command(parameters).send()
         
     async def async_set_wind_direction_vertical(self, value: int):
-        self._wind_direction_vertical = value
+
         parameters = {'windDirectionVertical': str(value)}
         await self._device.settings_command(parameters).send()
 
     async def async_set_eco_pilot_mode(self, value: int):
-        self._eco_pilot_mode = value
+
         parameters = {"humanSensingStatus": value}
         await self._device.settings_command(parameters).send()
 
@@ -273,15 +272,27 @@ class HonClimateEntity(CoordinatorEntity, ClimateEntity):
             return
 
 
-        self._attr_target_temperature   = int(float(self._device.get('tempSel')))
-        self._attr_current_temperature  = float(self._device.get('tempIndoor'))
+        from math import isfinite
+        def temperature(key):
+            value = self._device.get(key)
+            try:
+                result = float(value) if not isinstance(value, bool) else None
+                return result if result is not None and isfinite(result) else None
+            except (ValueError, TypeError):
+                return None
 
-        self._attr_fan_mode = get_key(CLIMATE_FAN_MODE, self._device.get('windSpeed'), self._attr_fan_modes[0])
-
-        if self._device.get('onOffStatus') == "0":
+        self._attr_target_temperature = temperature('tempSel')
+        self._attr_current_temperature = temperature('tempIndoor')
+        self._attr_fan_mode = get_key(CLIMATE_FAN_MODE, self._device.get('windSpeed'), None)
+        on_off = self._device.get('onOffStatus')
+        self._attr_hvac_mode = None
+        if on_off == "0":
             self._attr_hvac_mode = HVACMode.OFF
-        else:
-            self._attr_hvac_mode = get_key(CLIMATE_HVAC_MODE, self._device.get('machMode'), HVACMode.OFF)
+        elif on_off == "1":
+            self._attr_hvac_mode = get_key(CLIMATE_HVAC_MODE, self._device.get('machMode'), None)
+        self._available = (self._attr_target_temperature is not None
+                           and self._attr_current_temperature is not None
+                           and self._attr_hvac_mode is not None)
 
 
         self.update_swing_mode(self._device.get('windDirectionHorizontal'), self._device.get('windDirectionVertical'))
@@ -318,7 +329,7 @@ class HonClimateEntity(CoordinatorEntity, ClimateEntity):
     @property
     def available(self):
         """Return True if entity is available."""
-        return self._available
+        return super().available and self._available
 
     @property
     def device_info(self):
@@ -347,54 +358,62 @@ class HonClimateEntity(CoordinatorEntity, ClimateEntity):
         attr["eco_pilot_mode"]              = self._eco_pilot_mode
         return attr
 
+    def _mode_command(self, hvac_mode, parameters=None):
+        if hvac_mode == HVACMode.OFF:
+            if parameters:
+                raise ValueError("OFF cannot be combined with a temperature")
+            return self._device.stop_command({'onOffStatus': '0'})
+        programs = {
+            HVACMode.COOL: 'iot_cool', HVACMode.HEAT: 'iot_heat',
+            HVACMode.DRY: 'iot_dry', HVACMode.AUTO: 'iot_auto',
+            HVACMode.FAN_ONLY: 'iot_fan',
+        }
+        if hvac_mode not in programs:
+            raise ValueError("Unsupported HVAC mode")
+        return self._device.start_command(programs[hvac_mode], {
+            **(parameters or {}), 'machMode': CLIMATE_HVAC_MODE[hvac_mode], 'onOffStatus': '1'})
+
     async def async_set_temperature(self, **kwargs):
-        """Set new target temperature."""
-        if (temperature := kwargs.get(ATTR_TEMPERATURE)) is None:
-            return False
-        await self._device.settings_command({'tempSel': temperature}).send()
-        self._attr_target_temperature = int(float(temperature))
-        self.start_watcher()
+        """Validate mode and target together, then send one isolated command."""
+        parameters = {}
+        if (temperature := kwargs.get(ATTR_TEMPERATURE)) is not None:
+            parameters['tempSel'] = temperature
+        if (mode := kwargs.get('hvac_mode')) is not None:
+            command = self._mode_command(mode, parameters)
+        elif parameters:
+            power = self._device.get('onOffStatus')
+            mode = self._device.get('machMode')
+            if power not in ('0', '1') or mode not in CLIMATE_HVAC_MODE.values():
+                raise ValueError("No valid reported climate basis")
+            preserved = {'onOffStatus': power, 'machMode': mode}
+            schema = self._device.commands['settings'].parameters
+            command = self._device.settings_command({
+                **parameters, **{key: value for key, value in preserved.items() if key in schema}})
+        else:
+            raise ValueError("No climate intent supplied")
+        await command.send()
 
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Set new target hvac mode."""
-        command = {}
-
-        if hvac_mode == HVACMode.OFF:
-            await self._device.stop_command().send()
-        elif hvac_mode == HVACMode.COOL:
-            await self._device.start_command('iot_cool').send()
-        elif hvac_mode == HVACMode.HEAT:
-            await self._device.start_command('iot_heat').send()
-        elif hvac_mode == HVACMode.DRY:
-            await self._device.start_command('iot_dry').send()
-        elif hvac_mode == HVACMode.AUTO:
-            await self._device.start_command('iot_auto').send()
-        elif hvac_mode == HVACMode.FAN_ONLY:
-            await self._device.start_command('iot_fan').send()
-        self._attr_hvac_mode = hvac_mode
-        self.start_watcher()
+        await self._mode_command(hvac_mode).send()
 
 
     async def async_turn_off(self) -> None:
-        await self._device.stop_command().send()
-        self._attr_hvac_mode = HVACMode.OFF
-        self.start_watcher()
+        await self._device.stop_command({'onOffStatus': '0'}).send()
 
     async def async_turn_on(self) -> None:
-        await self._device.start_command('iot_simple_start').send()
-        self._attr_hvac_mode = get_key(CLIMATE_HVAC_MODE, self._device.get('machMode'), HVACMode.OFF)
-        self.start_watcher()
+        await self._device.start_command('iot_simple_start', {'onOffStatus': '1'}).send()
 
 
     async def async_set_fan_mode(self, fan_mode: str):
-        self._attr_fan_mode = fan_mode
-        await self._device.settings_command({'windSpeed':CLIMATE_FAN_MODE.get(fan_mode, CLIMATE_FAN_MODE.get(FAN_MEDIUM))}).send()
-        self.start_watcher()
+        if fan_mode not in self._attr_fan_modes:
+            raise ValueError("Unsupported fan mode")
+        await self._device.settings_command({'windSpeed': CLIMATE_FAN_MODE[fan_mode]}).send()
 
 
     async def async_set_swing_mode(self, swing_mode: str):
-        
+        if swing_mode not in self._attr_swing_modes:
+            raise ValueError("Unsupported swing mode")
         if swing_mode == SWING_BOTH:
             parameters = {'windDirectionHorizontal': ClimateSwingHorizontal.AUTO, 'windDirectionVertical': ClimateSwingVertical.AUTO}
 
@@ -417,9 +436,7 @@ class HonClimateEntity(CoordinatorEntity, ClimateEntity):
             if self._device.get('windDirectionVertical') == ClimateSwingVertical.AUTO:
                 parameters['windDirectionVertical'] =  ClimateSwingVertical.MIDDLE
 
-        self._attr_swing_mode = swing_mode
         await self._device.settings_command(parameters).send()
-        self.start_watcher()
 
 
     async def async_will_remove_from_hass(self):

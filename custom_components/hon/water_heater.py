@@ -103,15 +103,21 @@ class HonWaterHeaterEntity(CoordinatorEntity, WaterHeaterEntity):
         await self._coordinator.async_request_refresh()
 
     def _update_from_device(self, write=True):
-        self._attr_current_temperature = float(self._device.get("temp") or 0)
-        self._attr_target_temperature = float(self._device.get("tempSel") or 0)
-
-        if not self._is_on():
+        from math import isfinite
+        def temperature(key):
+            try:
+                value = float(self._device.get(key))
+                return value if isfinite(value) else None
+            except (ValueError, TypeError):
+                return None
+        self._attr_current_temperature = temperature("temp")
+        self._attr_target_temperature = temperature("tempSel")
+        on_off = self._device.get("onOffStatus")
+        self._attr_current_operation = None
+        if on_off == "0":
             self._attr_current_operation = STATE_OFF
-        else:
-            self._attr_current_operation = MACHMODE_TO_MODE.get(
-                str(self._device.get("machMode")), "Eco"
-            )
+        elif on_off == "1":
+            self._attr_current_operation = MACHMODE_TO_MODE.get(str(self._device.get("machMode")))
         if write:
             self.async_write_ha_state()
 
@@ -131,10 +137,7 @@ class HonWaterHeaterEntity(CoordinatorEntity, WaterHeaterEntity):
     async def async_set_temperature(self, **kwargs) -> None:
         if (temperature := kwargs.get(ATTR_TEMPERATURE)) is None:
             return
-        await self._device.settings_command({"tempSel": int(temperature)}).send()
-        self._attr_target_temperature = int(temperature)
-        self.start_watcher()
-        self.async_write_ha_state()
+        await self._device.settings_command({"tempSel": temperature}).send()
 
     async def async_set_operation_mode(self, operation_mode: str) -> None:
         if operation_mode == STATE_OFF:
@@ -147,22 +150,16 @@ class HonWaterHeaterEntity(CoordinatorEntity, WaterHeaterEntity):
             else:
                 # Powered off: (re)start with the matching program
                 await self._device.start_command(program).send()
-        self._attr_current_operation = operation_mode
-        self.start_watcher()
-        self.async_write_ha_state()
+
 
     async def async_turn_on(self, **kwargs) -> None:
         mode = MACHMODE_TO_MODE.get(str(self._device.get("machMode")), "Eco")
         await self._device.start_command(WH_MODES[mode][1]).send()
-        self._attr_current_operation = mode
-        self.start_watcher()
-        self.async_write_ha_state()
+
 
     async def async_turn_off(self, **kwargs) -> None:
         await self._device.stop_command().send()
-        self._attr_current_operation = STATE_OFF
-        self.start_watcher()
-        self.async_write_ha_state()
+
 
     async def async_will_remove_from_hass(self):
         if self._watcher is not None:

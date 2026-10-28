@@ -1,6 +1,24 @@
 #All credits to https://github.com/Andre0512/pyhOn
 
 import logging
+from decimal import Decimal, InvalidOperation
+
+
+def _decimal(value):
+    """Parse a finite numeric value without truncation or boolean coercion."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        raise ValueError("Expected a finite number")
+    try:
+        result = Decimal(str(value).replace(",", "."))
+    except InvalidOperation:
+        raise ValueError("Expected a finite number") from None
+    if not result.is_finite():
+        raise ValueError("Expected a finite number")
+    return result
+
+
+def _number(value):
+    return int(value) if value == value.to_integral_value() else float(value)
 _LOGGER = logging.getLogger(__name__)
 
 class HonParameter:
@@ -53,16 +71,15 @@ class HonParameterFixed(HonParameter):
 class HonParameterRange(HonParameter):
     def __init__(self, key, attributes):
         super().__init__(key, attributes)
-        try:
-            self._min = int(attributes["minimumValue"])
-            self._max = int(attributes["maximumValue"])
-            self._step = int(attributes["incrementValue"])
-            self._default = int(attributes.get("defaultValue", self._min))
-        except (TypeError, ValueError):
-            self._min = float(attributes["minimumValue"].replace(",","."))
-            self._max = float(attributes["maximumValue"].replace(",","."))
-            self._step = float(attributes["incrementValue"].replace(",","."))
-            self._default = float(attributes.get("defaultValue", self._min).replace(",","."))
+        self._minimum = _decimal(attributes["minimumValue"])
+        self._maximum = _decimal(attributes["maximumValue"])
+        self._increment = _decimal(attributes["incrementValue"])
+        if self._minimum > self._maximum or self._increment <= 0:
+            raise ValueError("Invalid range bounds or step")
+        self._min = _number(self._minimum)
+        self._max = _number(self._maximum)
+        self._step = _number(self._increment)
+        self._default = _number(_decimal(attributes.get("defaultValue", self._min)))
         self._value = self._default
         #_LOGGER.error(f"Param {key} min {self._min} | max {self._max} | step {self._step} | default {self._default}")
 
@@ -94,15 +111,14 @@ class HonParameterRange(HonParameter):
 
     @value.setter
     def value(self, value):
-        if type(value) == str and type(self._step) == float:
-            value = float(value.replace(",","."))
-        elif type(value) == str:
-            value = int(float(value.replace(",",".")))
-
-        if self._min <= value <= self._max and not value % self._step:
-            self._value = value
-        else:
-            raise ValueError(f"Key [{self.key}] Value [{value}] - Allowed: min {self._min} max {self._max} step {self._step}")
+        numeric = _decimal(value)
+        if not self._minimum <= numeric <= self._maximum:
+            raise ValueError(f"Parameter {self.key} outside range")
+        steps = (numeric - self._minimum) / self._increment
+        # Tolerate only floating point representation noise, never round a request.
+        if abs(steps - steps.to_integral_value()) > Decimal("1e-9"):
+            raise ValueError(f"Parameter {self.key} does not match step")
+        self._value = _number(numeric)
 
 
 class HonParameterEnum(HonParameter):

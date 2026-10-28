@@ -188,21 +188,21 @@ async def test_quiet_rejection_is_visible_without_noisy_retry(
 
 @pytest.mark.parametrize("low_level", [False, True])
 @pytest.mark.parametrize("appliance_type,quiet", [("AC", False), ("WM", True)])
-async def test_legacy_rejection_remains_false_when_policy_does_not_apply(
+async def test_rejection_raises_when_policy_does_not_apply(
     hass, entry, connection, http, low_level, appliance_type, quiet
 ):
     hass.config_entries.async_update_entry(entry, options={"quiet_ac_commands": quiet})
     http.post(SEND_URL, payload={"payload": {"resultCode": "1"}})
-    if low_level:
-        result = await connection.async_set(DEVICE.mac_address, appliance_type, {})
-    else:
-        device = SimpleNamespace(
-            mac_address=DEVICE.mac_address,
-            appliance_type=appliance_type,
-            commands_options={},
-        )
-        result = await connection.send_command(device, "settings", {}, {})
-    assert result is False
+    with pytest.raises(HomeAssistantError, match="hOn rejected"):
+        if low_level:
+            await connection.async_set(DEVICE.mac_address, appliance_type, {})
+        else:
+            device = SimpleNamespace(
+                mac_address=DEVICE.mac_address,
+                appliance_type=appliance_type,
+                commands_options={},
+            )
+            await connection.send_command(device, "settings", {}, {})
     assert len(sent(http)) == 1
 
 
@@ -255,7 +255,11 @@ async def test_poll_reauth_and_live_option_changes_do_not_reset_policy(
     http.get(
         f"{API_URL}/commands/v1/context?macAddress={device.mac_address}&applianceType=AC&category=CYCLE",
         payload={
-            "payload": {"shadow": {"parameters": {"echoStatus": {"parNewVal": "0"}}}}
+            # A settings command requires a complete reported base, not defaults.
+            "payload": {"shadow": {"parameters": {
+                key: {"parNewVal": value}
+                for key, value in device.attributes["parameters"].items()
+            }}}
         },
     )
     await device.load_context()

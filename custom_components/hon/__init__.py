@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
 #from homeassistant.helpers.template import device_id as get_device_id
-from homeassistant.exceptions import HomeAssistantError, ConfigEntryNotReady
+from homeassistant.exceptions import HomeAssistantError, ConfigEntryNotReady, ConfigEntryAuthFailed
 
 from .const import DOMAIN, PLATFORMS
 from .hon import HonConnection, get_hOn_mac
@@ -37,17 +37,19 @@ CONFIG_SCHEMA = vol.Schema(
 
 #TODO merge all programes names in language file
 
-# This method will update a sensor value with the targetted one for a better user experience
-def update_sensor(hass, device_id, mac, sensor_name, state):
+def _connection_for_mac(hass, mac):
+    """Resolve an active account per invocation, never capture the setup account."""
+    owners = [connection for key, connection in hass.data.get(DOMAIN, {}).items()
+              if key != SERVICE_REGISTRY and mac in connection._coordinator_dict]
+    if len(owners) != 1:
+        raise HomeAssistantError("hOn target has no unique active account")
+    return owners[0]
 
-    entity_reg  = er.async_get(hass)
-    entries     = er.async_entries_for_device(entity_reg, device_id)
 
-    # Loop over all entries and update the good one
-    for entry in entries:
-        if( entry.unique_id == mac + '_' + sensor_name):
-            inputStateObject = hass.states.get(entry.entity_id)
-            hass.states.async_set(entry.entity_id, state, inputStateObject.attributes)
+def _resolve_device(hass, device_id):
+    mac = get_hOn_mac(device_id, hass)
+    return _connection_for_mac(hass, mac)._coordinator_dict[mac].device
+
 
 def get_parameters(call):
     parameters_str = call.data.get("parameters", "{}")
@@ -97,15 +99,34 @@ async def async_get_device_ids(hass, call):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hon = HonConnection(hass, entry)
+    setup_complete = False
     try:
-        result = await hon.async_authorize()
-    except Exception as e:
-        raise ConfigEntryNotReady(f"hOn connection failed: {e}") from e
-    if not result:
-        raise ConfigEntryNotReady("hOn authentication failed")
+        result = await _async_setup_entry(hass, entry, hon)
+        setup_complete = bool(result)
+        return result
+    except ConfigEntryAuthFailed:
+        raise
+    except Exception:
+        # A client exception may contain the credential-bearing authorize URL.
+        raise ConfigEntryNotReady("hOn connection failed") from None
+    finally:
+        if not setup_complete:
+            await hon.async_close()
+            domain_data = hass.data.get(DOMAIN, {})
+            if domain_data.get(entry.unique_id) is hon:
+                domain_data.pop(entry.unique_id)
+            if not any(key != SERVICE_REGISTRY for key in domain_data):
+                for service_name in domain_data.get(SERVICE_REGISTRY, set()):
+                    hass.services.async_remove(DOMAIN, service_name)
+                hass.data.pop(DOMAIN, None)
 
-    # Log all appliances
-    _LOGGER.debug(f"Appliances: {hon.appliances}")
+
+async def _async_setup_entry(hass, entry, hon):
+    """Initialize the entry while the outer setup retains cleanup ownership."""
+    if not await hon.async_authorize():
+        raise ConfigEntryAuthFailed("hOn authentication failed")
+
+    _LOGGER.debug("Loaded %s hOn appliances", len(hon.appliances))
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.unique_id] = hon
@@ -151,7 +172,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         mac = get_hOn_mac(call.data.get("device"), hass)
 
-        return await hon.async_set(mac, "OV", parameters)
+        return await _connection_for_mac(hass, mac).async_set(mac, "OV", parameters)
 
     
     async def handle_dishwasher_start(call):
@@ -182,7 +203,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         mac = get_hOn_mac(call.data.get("device"), hass)
 
-        return await hon.async_set(mac, "DW", parameters)
+        return await _connection_for_mac(hass, mac).async_set(mac, "DW", parameters)
     
     async def handle_washingmachine_start(call):
 
@@ -246,10 +267,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         mac = get_hOn_mac(call.data.get("device"), hass)
 
-        json = await hon.async_get_state(mac, "WM")
+        json = await _connection_for_mac(hass, mac).async_get_state(mac, "WM")
 
         if json["category"] != "DISCONNECTED":
-            return await hon.async_set(mac, "WM", parameters)
+            return await _connection_for_mac(hass, mac).async_set(mac, "WM", parameters)
         _LOGGER.error(f"This hOn device is disconnected - Mac address [{mac}]")
 
 
@@ -262,7 +283,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         mac = get_hOn_mac(call.data.get("device"), hass)
 
-        return await hon.async_set(mac, "AP", parameters)
+        return await _connection_for_mac(hass, mac).async_set(mac, "AP", parameters)
 
     async def handle_purifier_maxmode(call):
 
@@ -270,7 +291,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         mac = get_hOn_mac(call.data.get("device"), hass)
 
-        return await hon.async_set(mac, "AP", parameters)
+        return await _connection_for_mac(hass, mac).async_set(mac, "AP", parameters)
 
     async def handle_purifier_automode(call):
 
@@ -278,21 +299,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         mac = get_hOn_mac(call.data.get("device"), hass)
 
-        return await hon.async_set(mac, "AP", parameters)
+        return await _connection_for_mac(hass, mac).async_set(mac, "AP", parameters)
 
     async def handle_purifier_sleepmode(call):
         parameters = { "machMode": "1" }
         mac = get_hOn_mac(call.data.get("device"), hass)
-        return await hon.async_set(mac, "AP", parameters)
+        return await _connection_for_mac(hass, mac).async_set(mac, "AP", parameters)
 
 
     # Generic method to set a mode to any hOn device
     async def handle_set_mode(call):
         #parameters = {"onOffStatus": "1", "machMode": call.data.get("mode", 1)}
-        #return await hon.async_set_parameter(call.data.get("device_id")[0], parameters)
+        #return await _connection_for_mac(hass, mac).async_set_parameter(call.data.get("device_id")[0], parameters)
         device_id = call.data.get("device")
         mac = get_hOn_mac(device_id, hass)
-        coordinator = await hon.async_get_existing_coordinator(mac)
+        coordinator = await _connection_for_mac(hass, mac).async_get_existing_coordinator(mac)
         parameters = {"onOffStatus": "1", "machMode": call.data.get("mode", 1)}
         await coordinator.async_set(parameters)
         await coordinator.async_request_refresh()
@@ -302,7 +323,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         device_id = call.data.get("device")
         mac = get_hOn_mac(device_id, hass)
         
-        coordinator = await hon.async_get_existing_coordinator(mac)
+        coordinator = await _connection_for_mac(hass, mac).async_get_existing_coordinator(mac)
         parameters = {"onOffStatus": "0", "machMode": "1" }
         await coordinator.async_set(parameters)
         await coordinator.async_request_refresh()
@@ -311,8 +332,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         device_id = call.data.get("device")
         mac = get_hOn_mac(device_id, hass)
 
-        update_sensor(hass, device_id, mac, "light_status" , "on")
-        coordinator = await hon.async_get_existing_coordinator(mac)
+
+        coordinator = await _connection_for_mac(hass, mac).async_get_existing_coordinator(mac)
         await coordinator.async_set({"lightStatus": "1"})
         await coordinator.async_request_refresh()
 
@@ -335,18 +356,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         #type_name   = identifiers[2]
 
         #parameters  = {"lightStatus": "1"}
-        #await hon.async_set(mac, type_name, parameters)
+        #await _connection_for_mac(hass, mac).async_set(mac, type_name, parameters)
 
         #update_sensor(hass, device_id, mac, "light_status" , "on")
 
-        #return await hon.async_set_parameter(call.data.get("device_id")[0], parameters)
+        #return await _connection_for_mac(hass, mac).async_set_parameter(call.data.get("device_id")[0], parameters)
 
     async def handle_light_off(call):
         device_id = call.data.get("device")
         mac = get_hOn_mac(device_id, hass)
-        update_sensor(hass, device_id, mac, "light_status" , "off")
 
-        coordinator = await hon.async_get_existing_coordinator(mac)
+
+        coordinator = await _connection_for_mac(hass, mac).async_get_existing_coordinator(mac)
         await coordinator.async_set({"lightStatus": "0"})
         await coordinator.async_request_refresh()
 
@@ -355,9 +376,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     async def handle_health_mode_on(call):
         device_id = call.data.get("device")
         mac = get_hOn_mac(device_id, hass)
-        update_sensor(hass, device_id, mac, "health_mode" , "on")
 
-        coordinator = await hon.async_get_existing_coordinator(mac)
+
+        coordinator = await _connection_for_mac(hass, mac).async_get_existing_coordinator(mac)
         await coordinator.async_set({"healthMode": "1"})
         await coordinator.async_request_refresh()
 
@@ -365,9 +386,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     async def handle_health_mode_off(call):
         device_id = call.data.get("device")
         mac = get_hOn_mac(device_id, hass)
-        update_sensor(hass, device_id, mac, "health_mode" , "off")
 
-        coordinator = await hon.async_get_existing_coordinator(mac)
+
+        coordinator = await _connection_for_mac(hass, mac).async_get_existing_coordinator(mac)
         await coordinator.async_set({"healthMode": "0"})
         await coordinator.async_request_refresh()
     
@@ -383,10 +404,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         
         for device_id in device_ids:
             #mac = get_hOn_mac(device_id, hass)
-            #coordinator = await hon.async_get_existing_coordinator(mac)
+            #coordinator = await _connection_for_mac(hass, mac).async_get_existing_coordinator(mac)
             #device = coordinator.device
 
-            device      = hon.get_device(hass, device_id)
+            device      = _resolve_device(hass, device_id)
             command     = device.commands.get("startProgram")
             programs    = command.get_programs()
             program     = call.data.get("program")
@@ -401,11 +422,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     async def handle_custom_request(call):
         #device_id   = call.data.get("device")
         #mac         = get_hOn_mac(device_id, hass)
-        #coordinator = await hon.async_get_existing_coordinator(mac)
+        #coordinator = await _connection_for_mac(hass, mac).async_get_existing_coordinator(mac)
         device_ids = get_device_ids(hass, call)
         parameters = get_parameters(call)
         for device_id in device_ids:
-            device = hon.get_device(hass, device_id)
+            device = _resolve_device(hass, device_id)
             await device.coordinator.async_set(parameters)
             await device.coordinator.async_request_refresh()
 
@@ -421,9 +442,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         for device_id in device_ids:
             #mac = get_hOn_mac(device_id, hass)
-            #coordinator = await hon.async_get_existing_coordinator(mac)
+            #coordinator = await _connection_for_mac(hass, mac).async_get_existing_coordinator(mac)
             #device = coordinator.device
-            device = hon.get_device(hass, device_id)
+            device = _resolve_device(hass, device_id)
             await device.settings_command(parameters).send()
 
 
@@ -435,7 +456,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         results = {}
 
         for device_id in device_ids:
-            device = hon.get_device(hass, device_id)
+            device = _resolve_device(hass, device_id)
             _LOGGER.warning(device)
             results[device_id] = device.get(parameter)
 

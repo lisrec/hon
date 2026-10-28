@@ -122,7 +122,8 @@ class HonBaseBinarySensorEntity(CoordinatorEntity, BinarySensorEntity):
         self.async_write_ha_state()
 
     def coordinator_update(self):
-        self._attr_is_on = self._device.get(self._key) == "1"
+        value = self._device.get(self._key)
+        self._attr_is_on = value == "1" if value in ("0", "1") else None
 
 class HonBaseSensorEntity(CoordinatorEntity, SensorEntity):
     def __init__(self, coordinator, appliance, key, sensor_name) -> None:
