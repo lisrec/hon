@@ -127,7 +127,7 @@ async def test_accepted_post_stale_get_does_not_invent_physical_success(
     climate = registered_climate
     before = deepcopy(device.attributes)
     http.post(SEND_URL, payload={"payload": {"resultCode": "0"}})
-    http.get(CONTEXT_URL, payload=snapshot(before["parameters"]))
+    http.get(CONTEXT_URL, payload=snapshot(before["parameters"]), repeat=True)
     await hass.services.async_call("climate", "set_temperature", {
         "entity_id": climate.entity_id, "temperature": 23
     }, blocking=True)

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from copy import copy, deepcopy
 
@@ -31,6 +32,11 @@ class HonDevice(CoordinatorEntity):
         self._appliance_model       = {}
         self._attributes            = {}
         self._statistics            = {}
+        # Command authorization is separate from the connector's POST lock:
+        # readback must be free to take that lock while this transaction settles.
+        self._command_transaction = asyncio.Lock()
+        self._command_generation = 0
+        self._pending_command = {}
 
 
     def __getitem__(self, item):
@@ -136,6 +142,13 @@ class HonDevice(CoordinatorEntity):
         snapshot.pop("shadow")
         snapshot["parameters"] = {key: value["parNewVal"] for key, value in parameters.items()}
         self._attributes = snapshot
+        # Even a confirming GET cannot rebase a draft already built from an
+        # older snapshot while another transaction was in flight.
+        self._command_generation += 1
+        if self._pending_command and HonCommand._parameters_match(snapshot["parameters"], self._pending_command):
+            # Confirmation comes only from a successfully parsed actual GET.
+            # Later remote changes must not be fenced by historical intent.
+            self._pending_command = {}
             
     @property
     def data(self):
@@ -241,6 +254,7 @@ class HonDevice(CoordinatorEntity):
                 raise ValueError("Unsupported program")
             source = source.get_programs()[requested_program]
         command = copy(source)
+        command._basis_generation = self._command_generation
         # Program selectors are local schema controls, never device parameters.
         command._parameters = {key: copy(value) for key, value in source.parameters.items() if key != "program"}
         power = command.parameters.get("onOffStatus")

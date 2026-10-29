@@ -157,4 +157,4 @@ async def test_actual_settings_envelope_preserves_reported_power_on_wire(
     assert str(parameters["echoStatus"]) == ("1" if quiet else "0")
     assert device.attributes == before  # Unchanged representative GET, not POST echo.
     assert device.coordinator.last_update_success
-    assert sum(len(calls) for calls in http.requests.values()) == 2
+    assert sum(len(calls) for calls in http.requests.values()) == 5  # One POST, four stale GETs.

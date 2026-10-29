@@ -215,6 +215,12 @@ async def test_raw_service_routes_to_active_device_owner_after_first_unload(
     connection._coordinator_dict[device.mac_address] = device.coordinator
     hass.data["hon"]["second-account"] = connection
     install_settings(device, connection)
+    from test_command_readback import CONTEXT_URL, snapshot
+    # Account routing is tested after real readback confirms the first intent.
+    http.clear()
+    http.get(CONTEXT_URL, payload=snapshot({
+        **device.attributes["parameters"], "tempSel": "23",
+    }), repeat=True)
     http.post(SEND_URL, payload={"payload": {"resultCode": "0"}}, repeat=True)
     for unload_first in [False, True]:
         if unload_first:

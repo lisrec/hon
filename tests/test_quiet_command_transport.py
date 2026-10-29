@@ -137,7 +137,8 @@ async def test_real_builder_to_transport_preserves_everything_except_echo(
     } == before
     assert device.attributes == shadow_before_send
     assert schema == original_schema
-    assert sum(len(calls) for calls in http.requests.values()) == 2
+    # The unchanged shadow matches only the start case; others exhaust four GETs.
+    assert sum(len(calls) for calls in http.requests.values()) == (2 if operation == "startProgram" else 5)
     assert len(sent(http)) == 1  # One POST plus readback, never a replay.
 
 
@@ -247,24 +248,24 @@ async def test_switch_low_level_rejection_propagates_before_optimistic_update(
 
 
 async def test_poll_reauth_and_live_option_changes_do_not_reset_policy(
-    hass, entry, connection, device, http, auth_http
+    hass, entry, connection, device, http, request
 ):
+    from test_command_readback import CONTEXT_URL, snapshot
+
+    # This policy test needs confirmed sequential drafts, not the intentionally
+    # stale ACK-only fixture. Responses remain server-sourced, including echo.
+    http.clear()
+    request.getfixturevalue("auth_http")
+    for target in ("22", "22", "23", "24"):
+        http.get(CONTEXT_URL, payload=snapshot({
+            **device.attributes["parameters"], "tempSel": target,
+        }))
     hass.config_entries.async_update_entry(entry, options={"quiet_ac_commands": True})
     device.commands["settings"] = HonCommand(
         "settings", command_schema(), connection, device
     )
     http.post(SEND_URL, payload={"payload": {"resultCode": "0"}}, repeat=True)
     assert await device.settings_command({"tempSel": "22"}).send()
-    http.get(
-        f"{API_URL}/commands/v1/context?macAddress={device.mac_address}&applianceType=AC&category=CYCLE",
-        payload={
-            # A settings command requires a complete reported base, not defaults.
-            "payload": {"shadow": {"parameters": {
-                key: {"parNewVal": value}
-                for key, value in device.attributes["parameters"].items()
-            }}}
-        },
-    )
     await device.load_context()
     assert device.get("echoStatus") == "0"
     connection._start_time = (
