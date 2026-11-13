@@ -56,13 +56,15 @@ class HonCommand:
         async with self._device._command_transaction:
             # OFF remains possible without a usable reported settings basis.
             power = self._parameters.get("onOffStatus")
+            operation = self._parameters.get("operationName")
             neutral_off = (self._name == "stopProgram" and power is not None
                            and type(power.value) in (str, int) and str(power.value) == "0"
-                           and not any(key not in ("onOffStatus", "echoStatus")
-                                       and (key in ("machMode", "tempSel", "windSpeed",
-                                                    "windDirectionHorizontal", "windDirectionVertical")
-                                            or not isinstance(parameter, HonParameterFixed))
-                                       for key, parameter in self._parameters.items()))
+                           and not (self._parameters.keys()
+                                    - {"onOffStatus", "echoStatus", "operationName"})
+                           and not self._ancillary_parameters
+                           and (operation is None
+                                or (isinstance(operation, HonParameterFixed)
+                                    and operation._value == "grSetDAC")))
             pending = self._device._pending_command
             if not neutral_off and (
                 self._basis_generation != self._device._command_generation

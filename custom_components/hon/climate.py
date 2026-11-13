@@ -7,6 +7,7 @@ from typing import Optional
 from enum import IntEnum
 from decimal import Decimal
 
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.climate import (
     ClimateEntity,
 )
@@ -410,11 +411,15 @@ class HonClimateEntity(CoordinatorEntity, ClimateEntity):
 
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        if hvac_mode == HVACMode.OFF:
+            await self.async_turn_off()
+            return
         await self._mode_command(hvac_mode).send()
 
 
     async def async_turn_off(self) -> None:
-        await self._device.stop_command({'onOffStatus': '0'}).send()
+        if not await self._device.stop_command({'onOffStatus': '0'}).send():
+            raise HomeAssistantError("hOn OFF command withheld: unresolved or superseded intent")
 
     async def async_turn_on(self) -> None:
         await self._device.start_command('iot_simple_start', {'onOffStatus': '1'}).send()

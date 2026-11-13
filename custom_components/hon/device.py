@@ -268,6 +268,22 @@ class HonDevice(CoordinatorEntity):
             # SETTINGS preserves power; rebase only this copied fixed field.
             # The fixed setter still rejects explicit conflicting power intent.
             power._value = str(reported) if isinstance(power.value, str) else int(reported)
+        operation = command.parameters.get("operationName")
+        if (name == "stopProgram" and self.appliance_type == "AC"
+            and not (parameters.keys() - {"onOffStatus"})
+            and isinstance(power, HonParameterFixed)
+            and type(power._value) in (str, int) and str(power._value) == "0"
+            and isinstance(operation, HonParameterFixed)
+            and operation._value == "grSetDAC"):
+            # The AC stop catalog shares its full SETTINGS schema. A plain OFF
+            # must not resend stale mutable values (or ancillary louvre intent).
+            # Keep only the declared stop opcode and power, on this draft only.
+            # Explicit extra settings still take the full, fenced path below.
+            self.update_command(command, parameters)
+            command._parameters = {key: command.parameters[key]
+                                   for key in ("onOffStatus", "operationName")}
+            command._ancillary_parameters = {}
+            return command
         self.seed_command(command, self.attributes.get("parameters", {}), parameters)
         self.update_command(command, parameters)
         return command
