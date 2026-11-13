@@ -1,0 +1,14 @@
+{
+  "_note": "Representative offline golden request for the existing hon.turn_off generic transport; not a production capture or physical proof. timestamp and transactionId are checked separately.",
+  "request": {
+    "macAddress": "00:00:00:00:00:01",
+    "commandName": "startProgram",
+    "applianceOptions": {},
+    "programName": "PROGRAMS.AC.HOME_ASSISTANT",
+    "ancillaryParameters": {"programFamily": "[standard]", "remoteActionable": "1", "remoteVisible": "1"},
+    "applianceType": "AC",
+    "attributes": {"prStr": "HOME_ASSISTANT", "channel": "googleHome", "origin": "conversationalVoice"},
+    "device": {"mobileId": "xxxxxxxxxxxxxxxxxxx", "mobileOs": "android", "osVersion": "31", "appVersion": "1.53.4", "deviceModel": "lito"},
+    "parameters": {"onOffStatus": "0", "machMode": "1"}
+  }
+}

@@ -17,6 +17,8 @@ class HonCommand:
         self._device = device
         self._basis_generation = device._command_generation
         self._name = name
+        # Internal transport selection; never a service/schema parameter.
+        self._generic_off = False
         self._multi = multi or {}
         self._program = program
         self._description = attributes.get("description", "")
@@ -73,11 +75,18 @@ class HonCommand:
             ):
                 _LOGGER.warning("hOn command withheld: reported basis has unresolved or superseded intent")
                 return False
-            return await self._send()
+            return await self._send(generic_off=neutral_off and self._generic_off)
 
-    async def _send(self):
+    async def _send(self, *, generic_off=False):
         parameters = {name: parameter.value for name, parameter in self._parameters.items()}
-        accepted = await self._connector.send_command(self._device, self._name, parameters, self.ancillary_parameters)
+        if generic_off:
+            # Use the existing hon.turn_off HOME_ASSISTANT envelope. machMode=1
+            # is required by this protocol, not user mode intent or a fence value.
+            # Keep the neutral draft for bookkeeping; never rebase telemetry.
+            accepted = await self._connector.async_set(
+                self._device.mac_address, "AC", {"onOffStatus": "0", "machMode": "1"})
+        else:
+            accepted = await self._connector.send_command(self._device, self._name, parameters, self.ancillary_parameters)
         if accepted:
             # Read actual context after the POST lock is released. Bypass the
             # request debouncer so consecutive commands each get fresh telemetry.

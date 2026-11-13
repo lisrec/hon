@@ -17,8 +17,11 @@ STOPS = json.loads((Path(__file__).parent / "fixtures/actual_ac_stop_programs.js
 @pytest.mark.parametrize("catalog", STOPS, ids=["AS25-first", "AS50", "AS25-third"])
 @pytest.mark.parametrize("intent", ["settings", "startProgram"])
 @pytest.mark.parametrize("quiet", [False, True])
+@pytest.mark.parametrize("service,data", [
+    ("turn_off", {}), ("set_hvac_mode", {"hvac_mode": "off"}),
+])
 async def test_real_stop_supersedes_power_without_replaying_unresolved_parameters(
-    hass, entry, device, connection, http, registered_climate, catalog, intent, quiet
+    hass, entry, device, connection, http, registered_climate, catalog, intent, quiet, service, data
 ):
     """ACK is not telemetry; OFF preserves unresolved nonpower authorization."""
     hass.config_entries.async_update_entry(entry, options={"quiet_ac_commands": quiet})
@@ -39,16 +42,22 @@ async def test_real_stop_supersedes_power_without_replaying_unresolved_parameter
     # The outgoing OFF must not contain stale target/fan/mode/preset fields.
     off = {**before, "onOffStatus": "0"}
     http.get(CONTEXT_URL, payload=snapshot(off))
-    await hass.services.async_call("climate", "turn_off", {
-        "entity_id": registered_climate.entity_id,
+    await hass.services.async_call("climate", service, {
+        "entity_id": registered_climate.entity_id, **data,
     }, blocking=True)
     assert len(sent(http)) == 2
     payload = sent(http)[1]
-    assert payload["commandName"] == "stopProgram"
-    assert payload["parameters"] == {
-        "onOffStatus": "0", "operationName": "grSetDAC", **({"echoStatus": "1"} if quiet else {}),
+    assert payload["commandName"] == "startProgram"
+    assert payload["programName"] == "PROGRAMS.AC.HOME_ASSISTANT"
+    assert payload["attributes"] == {
+        "prStr": "HOME_ASSISTANT", "channel": "googleHome", "origin": "conversationalVoice",
     }
-    assert payload["ancillaryParameters"] == {}
+    assert payload["parameters"] == {
+        "onOffStatus": "0", "machMode": "1", **({"echoStatus": "1"} if quiet else {}),
+    }
+    assert payload["ancillaryParameters"] == {
+        "programFamily": "[standard]", "remoteActionable": "1", "remoteVisible": "1",
+    }
     assert device.attributes["parameters"] == off
     assert hass.states.get(registered_climate.entity_id).state == "off"
     assert device._pending_command == {**pending, "onOffStatus": "0"}

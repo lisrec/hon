@@ -277,12 +277,14 @@ class HonDevice(CoordinatorEntity):
             and operation._value == "grSetDAC"):
             # The AC stop catalog shares its full SETTINGS schema. A plain OFF
             # must not resend stale mutable values (or ancillary louvre intent).
-            # Keep only the declared stop opcode and power, on this draft only.
+            # Retain only neutral intent. Transport uses the proven generic OFF
+            # envelope, not the lean stopProgram rejected by firmware in 0.8.10.
             # Explicit extra settings still take the full, fenced path below.
             self.update_command(command, parameters)
             command._parameters = {key: command.parameters[key]
                                    for key in ("onOffStatus", "operationName")}
             command._ancillary_parameters = {}
+            command._generic_off = True
             return command
         self.seed_command(command, self.attributes.get("parameters", {}), parameters)
         self.update_command(command, parameters)
