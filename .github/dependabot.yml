@@ -3,10 +3,14 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: daily
+      interval: cron
+      cronjob: '0 3 * * *'
+      timezone: Europe/Warsaw
   # requirements-test.txt pins the offline HA compatibility environment.
   # Review HA/aiohttp updates together; a bot PR is not a production upgrade.
   - package-ecosystem: pip
     directory: /
     schedule:
-      interval: daily
+      interval: cron
+      cronjob: '0 3 * * *'
+      timezone: Europe/Warsaw
