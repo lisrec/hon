@@ -3,7 +3,7 @@ homeassistant==2026.9.4
 # Keep HA's aiohttp pin; tests/conftest.py bridges the mock response signature.
 aiohttp==3.14.3
 aioresponses==0.7.9
-pytest==9.1.1
-pytest-asyncio==1.4.1
+pytest==9.2.0
+pytest-asyncio==1.5.0
 pytest-cov==7.1.0
-ruff==0.17.3
+ruff==0.17.5
