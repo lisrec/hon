@@ -149,9 +149,10 @@ async def test_combined_climate_dispatch_sends_mode_and_target_once(
     device.commands["startProgram"] = multi["iot_heat"]
     from homeassistant.helpers import entity_registry, device_registry
 
-    device_registry.async_setup(hass)
-    await device_registry.async_load(hass)
-    await entity_registry.async_load(hass)
+    if device_registry.DATA_REGISTRY not in hass.data:
+        device_registry.async_setup(hass)
+        await device_registry.async_load(hass)
+        await entity_registry.async_load(hass)
     assert await core_climate.async_setup(hass, {})
     component = hass.data[core_climate.DATA_COMPONENT]
     device.coordinator.last_update_success = True
@@ -205,9 +206,10 @@ async def test_raw_service_routes_to_active_device_owner_after_first_unload(
     from custom_components.hon import async_unload_entry
     from homeassistant.helpers import device_registry, entity_registry
 
-    device_registry.async_setup(hass)
-    await device_registry.async_load(hass)
-    await entity_registry.async_load(hass)
+    if device_registry.DATA_REGISTRY not in hass.data:
+        device_registry.async_setup(hass)
+        await device_registry.async_load(hass)
+        await entity_registry.async_load(hass)
     reg = device_registry.async_get(hass)
     target = reg.async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={("hon", device.mac_address, "AC")}
@@ -247,8 +249,9 @@ async def test_legacy_service_resolves_owner_not_setup_account(
 ):
     from homeassistant.helpers import device_registry
 
-    device_registry.async_setup(hass)
-    await device_registry.async_load(hass)
+    if device_registry.DATA_REGISTRY not in hass.data:
+        device_registry.async_setup(hass)
+        await device_registry.async_load(hass)
     target = device_registry.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={("hon", device.mac_address, "AC")}
     )
@@ -422,9 +425,10 @@ async def test_existing_raw_service_batches_mode_target_health_once(
 ):
     from homeassistant.helpers import device_registry, entity_registry
 
-    device_registry.async_setup(hass)
-    await device_registry.async_load(hass)
-    await entity_registry.async_load(hass)
+    if device_registry.DATA_REGISTRY not in hass.data:
+        device_registry.async_setup(hass)
+        await device_registry.async_load(hass)
+        await entity_registry.async_load(hass)
     target = device_registry.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={("hon", device.mac_address, "AC")}
     )
@@ -577,9 +581,10 @@ async def test_legacy_rejection_does_not_write_reported_sensor(
 ):
     from homeassistant.helpers import device_registry, entity_registry
 
-    device_registry.async_setup(hass)
-    await device_registry.async_load(hass)
-    await entity_registry.async_load(hass)
+    if device_registry.DATA_REGISTRY not in hass.data:
+        device_registry.async_setup(hass)
+        await device_registry.async_load(hass)
+        await entity_registry.async_load(hass)
     target = device_registry.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={("hon", device.mac_address, "AC")}
     )
@@ -602,9 +607,10 @@ async def test_unknown_service_target_fails_without_attribute_error(
 ):
     from homeassistant.helpers import device_registry, entity_registry
 
-    device_registry.async_setup(hass)
-    await device_registry.async_load(hass)
-    await entity_registry.async_load(hass)
+    if device_registry.DATA_REGISTRY not in hass.data:
+        device_registry.async_setup(hass)
+        await device_registry.async_load(hass)
+        await entity_registry.async_load(hass)
     with pytest.raises(HomeAssistantError):
         await hass.services.async_call(
             "hon",

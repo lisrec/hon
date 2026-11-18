@@ -35,9 +35,10 @@ async def registered_climate(hass, entry, device, connection):
     device.commands["startProgram"] = start
     hass.data["hon"] = {entry.unique_id: connection}
     climate = HonClimateEntity(hass, device.coordinator, entry, device.appliance)
-    device_registry.async_setup(hass)
-    await device_registry.async_load(hass)
-    await entity_registry.async_load(hass)
+    if device_registry.DATA_REGISTRY not in hass.data:
+        device_registry.async_setup(hass)
+        await device_registry.async_load(hass)
+        await entity_registry.async_load(hass)
     assert await core_climate.async_setup(hass, {})
     component = hass.data[core_climate.DATA_COMPONENT]
     component._platforms["climate"].config_entry = entry
