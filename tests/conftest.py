@@ -1,6 +1,7 @@
 """Real HA runtime, isolated storage and fail-closed HTTP for offline tests."""
 
 import re
+from importlib.util import find_spec
 from pathlib import Path
 from types import MappingProxyType
 from unittest.mock import AsyncMock, Mock, patch
@@ -91,19 +92,26 @@ def unchanged_context(http, device):
     )
 
 
-@pytest.fixture
-async def hass(tmp_path):
-    (tmp_path / "custom_components").symlink_to(
-        Path(__file__).resolve().parents[1] / "custom_components",
-        target_is_directory=True,
-    )
-    instance = HomeAssistant(str(tmp_path))
-    async_setup(instance)
-    frame.async_setup(instance)
-    instance.config_entries = ConfigEntries(instance, {})
-    await instance.config_entries.async_initialize()
-    yield instance
-    await instance.async_stop(force=True)
+if find_spec("pytest_homeassistant") is None:
+    @pytest.fixture
+    async def hass(tmp_path):
+        """Retain the exact production-compatible Core's minimal fixture."""
+        (tmp_path / "custom_components").symlink_to(
+            Path(__file__).resolve().parents[1] / "custom_components",
+            target_is_directory=True,
+        )
+        instance = HomeAssistant(str(tmp_path))
+        async_setup(instance)
+        frame.async_setup(instance)
+        instance.config_entries = ConfigEntries(instance, {})
+        await instance.config_entries.async_initialize()
+        yield instance
+        await instance.async_stop(force=True)
+else:
+    @pytest.fixture
+    def hass_config_dir(hass_tmp_config_dir):
+        """Use the official fixture, but never write its shared repo config."""
+        return hass_tmp_config_dir
 
 
 @pytest.fixture

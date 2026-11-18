@@ -4,7 +4,11 @@ import pytest
 from aiohttp import web
 
 @pytest.fixture(autouse=True)
-def http(monkeypatch):
+def http(monkeypatch, request):
+    # The official HA plugin disables IP socket creation. Re-enable creation
+    # only here, retaining the connect guard below for loopback-only traffic.
+    if request.config.pluginmanager.hasplugin("pytest_homeassistant"):
+        request.getfixturevalue("socket_enabled")
     # Override parent aioresponses fixture: this suite exercises real sockets.
     original = socket.socket.connect
     def guarded(sock, address):

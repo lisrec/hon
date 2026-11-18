@@ -50,9 +50,10 @@ def schema_state(device):
 @pytest.fixture
 async def fan_climate(hass, entry, device, connection, request):
     climate = await install_fan_catalog(hass, entry, device, connection, request.param)
-    device_registry.async_setup(hass)
-    await device_registry.async_load(hass)
-    await entity_registry.async_load(hass)
+    if device_registry.DATA_REGISTRY not in hass.data:
+        device_registry.async_setup(hass)
+        await device_registry.async_load(hass)
+        await entity_registry.async_load(hass)
     assert await core_climate.async_setup(hass, {})
     component = hass.data[core_climate.DATA_COMPONENT]
     component._platforms["climate"].config_entry = entry
@@ -236,9 +237,10 @@ async def test_explicit_invalid_raw_start_program_rejected_before_post(
     # loaded_entry owns a separate connection; close it before replacing its key.
     await hass.data["hon"][entry.unique_id].async_close()
     climate = await install_fan_catalog(hass, entry, device, connection, model)
-    device_registry.async_setup(hass)
-    await device_registry.async_load(hass)
-    await entity_registry.async_load(hass)
+    if device_registry.DATA_REGISTRY not in hass.data:
+        device_registry.async_setup(hass)
+        await device_registry.async_load(hass)
+        await entity_registry.async_load(hass)
     target = device_registry.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id, identifiers={("hon", device.mac_address, "AC")})
     connection._coordinator_dict[device.mac_address] = device.coordinator

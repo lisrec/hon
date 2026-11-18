@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import aiohttp
 import pytest
 from aiohttp import web
+from aiohttp.web_protocol import RequestHandler
 from homeassistant.exceptions import HomeAssistantError, ConfigEntryAuthFailed, ConfigEntryNotReady
 import custom_components.hon as integration
 from custom_components.hon.hon import HonConnection
@@ -32,10 +33,40 @@ async def test_F01_untrusted_tls_rejected_before_credentials(server, connection)
     here = Path(__file__).parent
     context.load_cert_chain(here / "loopback.crt", here / "loopback.key")
     await server(handler, context)
-    # Error translation may wrap TLS failure, but the peer must receive nothing.
-    with pytest.raises((aiohttp.ClientError, HomeAssistantError)):
-        await connection.async_authorize()
-    assert observed == []
+    # A client rejecting the synthetic certificate also resets the server-side
+    # TLS handshake. Account for that precise expected loopback error rather
+    # than disabling the official fixture's uncaught-exception checks.
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    previous_debug = loop.get_debug()
+    rejected_handshake = asyncio.Event()
+
+    def expected_tls_reset(loop, details):
+        # The transport is already closed and cannot provide sockname here;
+        # this test's socket guard permits loopback only, with one local server.
+        if (
+            type(details.get("exception")) is ConnectionResetError
+            and details.get("message") == "Error on transport creation for incoming connection"
+            and isinstance(details.get("protocol"), RequestHandler)
+        ):
+            rejected_handshake.set()
+            return
+        if previous_handler:
+            previous_handler(loop, details)
+        else:
+            loop.default_exception_handler(details)
+
+    loop.set_debug(True)
+    loop.set_exception_handler(expected_tls_reset)
+    try:
+        # Error translation may wrap TLS failure; the peer receives nothing.
+        with pytest.raises((aiohttp.ClientError, HomeAssistantError)):
+            await connection.async_authorize()
+        await asyncio.wait_for(rejected_handshake.wait(), timeout=2)
+        assert observed == []
+    finally:
+        loop.set_exception_handler(previous_handler)
+        loop.set_debug(previous_debug)
 
 @pytest.mark.parametrize("body,content_type", [("secret response", "text/html"), ("{", "application/json"), ("[]", "application/json")])
 async def test_F02_authorize_errors_are_secret_safe(server, connection, caplog, body, content_type):
