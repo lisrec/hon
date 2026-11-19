@@ -8,7 +8,13 @@ files or override a Core-owned dependency with `--no-deps`.
 | Lane | Requirements | Core | aiohttp | Fixtures |
 | --- | --- | --- | --- | --- |
 | Production compatibility | `requirements-test.txt` | 2026.9.4 | 3.14.3 | Existing minimal real-HA fixture |
-| Modern development | `requirements-test-modern.txt` | 2026.11.2 | 3.14.5 | Official matching `pytest-homeassistant==2026.11.2` |
+| Modern development | `requirements-dev.txt` | 2026.11.2 | 3.14.5 | Official matching `pytest-homeassistant==2026.11.2` |
+
+The modern file uses the conventional root `requirements-dev.txt` name so the
+nightly dependency inventory and bounded PyPI fallback discover it alongside
+`requirements-test.txt`. Do not combine these two environments. Calendar-daily
+Dependabot configuration alone does not prove the fork updater has executed;
+the pip fallback does not cover GitHub Actions version checks.
 
 The legacy pytest 9.2.0/pytest-asyncio 1.5.0 pins remain unchanged. The official
 modern fixture requires pytest 9.0.3/pytest-asyncio 1.4.0 exactly; this deliberate
