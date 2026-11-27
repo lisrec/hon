@@ -1,8 +1,8 @@
 # Modern development lane; Core and official fixtures must move together.
 # Do not combine with requirements-test.txt (the retained production lane).
 # The official fixture owns the pytest/asyncio pair; no --no-deps overrides.
-homeassistant==2026.11.2
-pytest-homeassistant==2026.11.2
+homeassistant==2026.11.3
+pytest-homeassistant==2026.11.3
 aiohttp==3.14.5
 aioresponses==0.7.9
 pytest==9.0.3

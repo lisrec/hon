@@ -8,7 +8,7 @@ files or override a Core-owned dependency with `--no-deps`.
 | Lane | Requirements | Core | aiohttp | Fixtures |
 | --- | --- | --- | --- | --- |
 | Production compatibility | `requirements-test.txt` | 2026.9.4 | 3.14.3 | Existing minimal real-HA fixture |
-| Modern development | `requirements-dev.txt` | 2026.11.2 | 3.14.5 | Official matching `pytest-homeassistant==2026.11.2` |
+| Modern development | `requirements-dev.txt` | 2026.11.3 | 3.14.5 | Official matching `pytest-homeassistant==2026.11.3` |
 
 The modern file uses the conventional root `requirements-dev.txt` name so the
 nightly dependency inventory and bounded PyPI fallback discover it alongside

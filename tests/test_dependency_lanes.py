@@ -19,7 +19,7 @@ def test_every_ci_lane_is_visible_to_daily_dependency_inventory():
 
 def test_modern_lane_keeps_core_owned_patched_aiohttp_and_official_fixture():
     requirements = (ROOT / "requirements-dev.txt").read_text().splitlines()
-    for pin in ("homeassistant==2026.11.2", "pytest-homeassistant==2026.11.2",
+    for pin in ("homeassistant==2026.11.3", "pytest-homeassistant==2026.11.3",
                 "aiohttp==3.14.5", "pytest==9.0.3", "pytest-asyncio==1.4.0"):
         assert pin in requirements
     legacy = (ROOT / "requirements-test.txt").read_text().splitlines()
